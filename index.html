@@ -10,6 +10,7 @@
 <link rel="manifest" href="manifest.json"/>
 <link rel="apple-touch-icon" href="icon-192.png"/>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
 <title>Meet Me In The Middle</title>
 
 <style>
@@ -178,7 +179,25 @@ button { cursor: pointer; border: none; background: none; }
 .vote-btn.up { background: var(--accent-l); border-color: var(--accent); }
 .vote-btn.down { background: var(--coral-l); border-color: var(--coral); }
 
-/* ── Schematic map ── */
+/* ── Area candidate cards ── */
+.area-card { background: var(--surface); border: 2px solid var(--border); border-radius: 14px; padding: 14px 15px; margin-bottom: 10px; cursor: pointer; transition: all .18s; box-shadow: 0 2px 8px var(--sh); }
+.area-card.selected { border-color: var(--accent); background: var(--accent-l); }
+.area-card .area-name { font-weight: 800; font-size: 15px; margin-bottom: 4px; }
+.area-card .area-meta { color: var(--sub); font-size: 12px; line-height: 1.5; }
+.area-card .area-times { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.area-time-chip { font-size: 11px; font-weight: 600; border-radius: 99px; padding: 3px 10px; border: 1px solid transparent; }
+
+/* ── Toggle switches ── */
+.toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.toggle-row:last-child { border-bottom: none; }
+.toggle-label { font-size: 13px; font-weight: 600; color: var(--text); }
+.toggle-sub { font-size: 11px; color: var(--sub); margin-top: 1px; }
+.toggle { position: relative; width: 44px; height: 26px; flex-shrink: 0; }
+.toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+.toggle-track { position: absolute; inset: 0; border-radius: 13px; background: var(--border-m); transition: background .2s; cursor: pointer; }
+.toggle input:checked + .toggle-track { background: var(--accent); }
+.toggle-thumb { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: white; box-shadow: 0 1px 4px rgba(0,0,0,.2); transition: transform .2s; pointer-events: none; }
+.toggle input:checked ~ .toggle-thumb { transform: translateX(18px); }
 .schema-map { background: #D6EAD7; border-radius: 14px; height: 300px; position: relative; overflow: hidden; border: 1px solid var(--border); }
 .schema-road-h { position: absolute; left: 0; right: 0; height: 7px; background: #fff; opacity: .55; }
 .schema-road-v { position: absolute; top: 0; bottom: 0; width: 7px; background: #fff; opacity: .55; }
@@ -209,6 +228,11 @@ button { cursor: pointer; border: none; background: none; }
    CONSTANTS
 ══════════════════════════════════════════════════════════════ */
 const FRIEND_COLORS = ["#1A7F5A","#2563EB","#E11D48","#9333EA"];
+
+/* ── ORS configuration ── */
+const ORS_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjA4NjhhMjQ0MjBkYjQ0YjI4YjBlN2NmMDQ5Y2UwZDgxIiwiaCI6Im11cm11cjY0In0=";
+const ORS_BASE = "https://api.openrouteservice.org";
+const ORS_PROFILE = { driving:"driving-car", transit:"driving-car", walking:"foot-walking", cycling:"cycling-regular" };
 
 const AVATAR_OPTIONS = ["🧑","👩","🧔","👱","👨","👩‍🦱","👩‍🦰","🧑‍🦱","👴","👵","🧑‍🦳","🧑‍🦲","🧒","👧","👦","🧕","🐶","🐱","🦊","🐻","🐼","🦁","🐯","🐨","🌟","🔥","⚡","🌈","🎸","🎯","🚀","💎"];
 const COLOR_OPTIONS  = ["#1A7F5A","#2563EB","#9333EA","#E11D48","#EA580C","#CA8A04","#0891B2","#65A30D"];
@@ -249,20 +273,25 @@ const FEATURES = [
    APP STATE
 ══════════════════════════════════════════════════════════════ */
 let STATE = {
-  screen: "home",          // home | friends | categories | results
+  screen: "home",          // home | friends | categories | areas | results
   friends: [
     { id:0, name:"Me", avatar:"🧑", color:FRIEND_COLORS[0], photo:null, location:"", coords:null },
   ],
   travelMode: "driving",
+  allowTolls: true,
+  allowFerry: false,
   categories: ["restaurant","bar","cafe"],
   vibe: "casual",
   venues: [],
   midpt: null,
+  candidateAreas: [],      // [{lat,lng,label,times,fairness}]
+  selectedAreas: [],       // indices into candidateAreas chosen by user
   votes: {},
   saved: [],
   activeTab: "list",
   venueFilter: "all",
   venueError: "",
+  areaError: "",
   _lastRadiusM: 3000,
   modal: null,   // null | "avatar" | "location" | "contact" | "info" | "venue"
   modalData: {}, // context for open modal
@@ -387,7 +416,122 @@ async function reverseGeocode(lat, lng) {
   return { label, lat, lng };
 }
 
-async function fetchVenues(lat, lng, catIds, radius=2000) {
+/* ══════════════════════════════════════════════════════════════
+   ORS ISOCHRONE ENGINE
+══════════════════════════════════════════════════════════════ */
+
+// Fetch a single isochrone polygon for one location at given minutes
+async function fetchIsochrone(lat, lng, minutes, profile) {
+  const url = `${ORS_BASE}/v2/isochrones/${profile}`;
+  const body = {
+    locations: [[lng, lat]],
+    range: [minutes * 60],
+    range_type: "time",
+    smoothing: 0.1,
+    area_units: "km",
+  };
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Authorization": ORS_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`ORS isochrone HTTP ${r.status}`);
+  return await r.json();  // GeoJSON FeatureCollection
+}
+
+// Reverse-geocode a coordinate to a neighborhood/area name via Nominatim
+async function areaLabel(lat, lng) {
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=12`;
+    const r = await fetch(url);
+    const d = await r.json();
+    const a = d.address || {};
+    return a.neighbourhood || a.suburb || a.quarter || a.village || a.town || a.city || a.county || "Area";
+  } catch { return "Area"; }
+}
+
+// Core Phase 1: compute candidate meet areas using isochrone intersections
+// Strategy: step up time intervals until intersections exist; score by fairness
+async function findCandidateAreas() {
+  const activeFriends = STATE.friends.filter(f => f.coords);
+  if (activeFriends.length < 2) throw new Error("Need at least 2 locations");
+
+  const profile = ORS_PROFILE[STATE.travelMode] || "driving-car";
+
+  // Time steps to try (minutes). Start at 20, step up until intersection found.
+  const timeSteps = [20, 25, 30, 40, 50, 60, 75];
+  let candidatePoints = [];
+
+  for (const mins of timeSteps) {
+    // Fetch isochrone for each friend in parallel
+    const isoResults = await Promise.all(
+      activeFriends.map(f => fetchIsochrone(f.coords.lat, f.coords.lng, mins, profile))
+    );
+
+    // Extract first polygon from each result
+    const polys = isoResults.map(r => r.features?.[0]).filter(Boolean);
+    if (polys.length < activeFriends.length) continue;
+
+    // Intersect all polygons
+    let intersection = polys[0];
+    for (let i = 1; i < polys.length; i++) {
+      try { intersection = turf.intersect(intersection, polys[i]); }
+      catch { intersection = null; }
+      if (!intersection) break;
+    }
+    if (!intersection) continue;
+
+    // Sample points within intersection (centroid + up to 4 distributed points)
+    const pts = [];
+
+    // Centroid of intersection
+    const centroid = turf.centroid(intersection);
+    pts.push({ lat: centroid.geometry.coordinates[1], lng: centroid.geometry.coordinates[0] });
+
+    // Additional distributed points via bbox grid
+    const bbox = turf.bbox(intersection);
+    const gridCandidates = [
+      { lat: (bbox[1]*2+bbox[3])/3,   lng: (bbox[0]+bbox[2])/2 },
+      { lat: (bbox[1]+bbox[3]*2)/3,   lng: (bbox[0]+bbox[2])/2 },
+      { lat: (bbox[1]+bbox[3])/2,     lng: (bbox[0]*2+bbox[2])/3 },
+      { lat: (bbox[1]+bbox[3])/2,     lng: (bbox[0]+bbox[2]*2)/3 },
+    ];
+    for (const pt of gridCandidates) {
+      const turfPt = turf.point([pt.lng, pt.lat]);
+      if (turf.booleanPointInPolygon(turfPt, intersection)) pts.push(pt);
+    }
+
+    // Score each point by travel-time fairness (using haversine estimate for now)
+    for (const pt of pts) {
+      const times = activeFriends.map(f => estimateMins(f.coords, pt, STATE.travelMode));
+      const mx = Math.max(...times), mn = Math.min(...times);
+      const fairness = mx > 0 ? Math.round((1 - (mx - mn) / mx) * 100) : 100;
+      candidatePoints.push({ lat: pt.lat, lng: pt.lng, times, fairness, mins });
+    }
+
+    // If we have enough candidates, stop stepping up
+    if (candidatePoints.length >= 5) break;
+  }
+
+  if (candidatePoints.length === 0) {
+    throw new Error("Could not find a reachable overlap area. Try increasing travel range or check that locations are driveable.");
+  }
+
+  // Sort by fairness desc, deduplicate by proximity (~2km), take top 5
+  candidatePoints.sort((a, b) => b.fairness - a.fairness);
+  const deduped = [];
+  for (const pt of candidatePoints) {
+    const tooClose = deduped.some(d => haversineKm(d, pt) < 2);
+    if (!tooClose) deduped.push(pt);
+    if (deduped.length >= 5) break;
+  }
+
+  // Reverse-geocode labels in parallel
+  const labels = await Promise.all(deduped.map(p => areaLabel(p.lat, p.lng)));
+  return deduped.map((p, i) => ({ ...p, label: labels[i] }));
+}
+
+
   // Nominatim free-text search bounded to a viewbox around the midpoint.
   // ?q= is the only reliably supported search parameter across all result types.
   // amenity=/leisure= as standalone params return 400 — confirmed in production.
@@ -940,7 +1084,7 @@ function renderHome() {
 
 function renderFriends() {
   const wrap = h("div",{class:"screen-pad"});
-  wrap.appendChild(h("div",{class:"step-label"},"Step 1 of 3"));
+  wrap.appendChild(h("div",{class:"step-label"},"Step 1 of 4"));
   wrap.appendChild(h("div",{class:"screen-title"},"Who's meeting up?"));
   wrap.appendChild(h("div",{class:"screen-sub"},"Add 2–4 people. Tap 📍 to set each person's starting location."));
 
@@ -995,13 +1139,33 @@ function renderFriends() {
 
   // Travel mode
   wrap.appendChild(h("div",{style:"font-weight:700;font-size:14px;margin-bottom:9px"},"Travel mode"));
-  const pills=h("div",{class:"pills",style:"margin-bottom:20px"});
+  const pills=h("div",{class:"pills",style:"margin-bottom:14px"});
   [["🚗","driving","Driving"],["🚇","transit","Transit"],["🚶","walking","Walking"],["🚲","cycling","Cycling"]].forEach(([ic,id,lb])=>{
     const p=h("button",{class:`pill${STATE.travelMode===id?" active":""}`},ic+" "+lb);
     p.onclick=()=>{ STATE.travelMode=id; render(); };
     pills.appendChild(p);
   });
   wrap.appendChild(pills);
+
+  // Route options toggles
+  const toggleBox=h("div",{style:"background:var(--hi);border:1px solid var(--border);border-radius:12px;padding:4px 14px;margin-bottom:18px"});
+  function makeToggle(label, sub, key) {
+    const row=h("div",{class:"toggle-row"});
+    const textCol=h("div",{});
+    textCol.appendChild(h("div",{class:"toggle-label"},label));
+    textCol.appendChild(h("div",{class:"toggle-sub"},sub));
+    const sw=h("label",{class:"toggle"});
+    const inp=h("input",{type:"checkbox"});
+    inp.checked=STATE[key];
+    inp.onchange=()=>{STATE[key]=inp.checked;};
+    const track=h("span",{class:"toggle-track"});
+    const thumb=h("span",{class:"toggle-thumb"});
+    sw.append(inp,track,thumb);
+    row.append(textCol,sw);
+    return row;
+  }
+  toggleBox.append(makeToggle("Allow tolls","Use toll roads when faster","allowTolls"),makeToggle("Allow ferry","Include ferry routes (e.g. Catalina)","allowFerry"));
+  wrap.appendChild(toggleBox);
 
   // Progress
   const readyCount=STATE.friends.filter(f=>f.coords).length;
@@ -1022,7 +1186,7 @@ function renderFriends() {
 
 function renderCategories() {
   const wrap=h("div",{class:"screen-pad"});
-  wrap.appendChild(h("div",{class:"step-label"},"Step 2 of 3"));
+  wrap.appendChild(h("div",{class:"step-label"},"Step 2 of 4"));
   wrap.appendChild(h("div",{class:"screen-title"},"What's the vibe?"));
   wrap.appendChild(h("div",{class:"screen-sub"},"Choose the mood and the types of places to look for. We'll search real venues near your midpoint."));
 
@@ -1052,44 +1216,134 @@ function renderCategories() {
   });
   wrap.appendChild(grid);
 
-  const nextBtn=h("button",{class:"btn-primary"},"Find Real Venues Near Midpoint →");
+  const nextBtn=h("button",{class:"btn-primary"},"Find Meeting Areas →");
   nextBtn.disabled=STATE.categories.length===0;
+  nextBtn.onclick=()=>loadAreas();
+  wrap.appendChild(nextBtn);
+  return wrap;
+}
+
+/* ── Load candidate areas (Phase 1 ORS) ── */
+async function loadAreas() {
+  setState({screen:"areas", candidateAreas:[], selectedAreas:[], areaError:"", midpt:null});
+  render();
+  try {
+    const areas = await findCandidateAreas();
+    STATE.candidateAreas = areas;
+    STATE.areaError = "";
+  } catch(e) {
+    STATE.areaError = e.message || "Could not compute meeting areas. Check your connection.";
+    console.error("ORS area search failed", e);
+  }
+  render();
+}
+
+async function loadResults() {
+  // Called after area selection — midpt is the centroid of selected area(s)
+  const chosen = STATE.selectedAreas.length > 0
+    ? STATE.selectedAreas.map(i => STATE.candidateAreas[i])
+    : STATE.candidateAreas.slice(0,1);
+
+  // Centroid of chosen areas
+  const mp = {
+    lat: chosen.reduce((s,a)=>s+a.lat,0)/chosen.length,
+    lng: chosen.reduce((s,a)=>s+a.lng,0)/chosen.length,
+  };
+
+  setState({screen:"results", venues:[], midpt:null, activeTab:"list", venueError:""});
+  render();
+
+  const activeFriends = STATE.friends.filter(f=>f.coords);
+  let maxDist=0;
+  for (let a=0;a<activeFriends.length;a++) {
+    for (let b=a+1;b<activeFriends.length;b++) {
+      const d=haversineKm(activeFriends[a].coords,activeFriends[b].coords);
+      if(d>maxDist) maxDist=d;
+    }
+  }
+  const radiusM=Math.round(Math.min(Math.max(maxDist*500,1500),15000));
+  STATE._lastRadiusM=radiusM;
+
+  try {
+    const vs=await fetchVenues(mp.lat,mp.lng,STATE.categories,radiusM);
+    STATE.venues=vs;
+    STATE.midpt=mp;
+  } catch(e) {
+    STATE.midpt=mp;
+    STATE.venues=[];
+    STATE.venueError="Could not load venues ("+(e.message||"network error")+"). Check your connection and try again.";
+    console.error("Venue fetch error",e);
+  }
+  render();
+}
+
+function renderAreas() {
+  const wrap=h("div",{class:"screen-pad"});
+  wrap.appendChild(h("div",{class:"step-label"},"Step 3 of 4"));
+  wrap.appendChild(h("div",{class:"screen-title"},"Choose a meeting area"));
+  wrap.appendChild(h("div",{class:"screen-sub"},"These areas are reachable by everyone within similar travel times. Pick one or more, then we'll search for real venues there."));
+
+  // Loading state
+  if(STATE.candidateAreas.length===0 && !STATE.areaError) {
+    const loading=h("div",{style:"display:flex;flex-direction:column;align-items:center;gap:16px;padding:48px 0"});
+    loading.appendChild(h("div",{class:"spin",style:"width:48px;height:48px;border-width:3px"}));
+    loading.appendChild(h("div",{style:"font-weight:700;font-size:15px;text-align:center"},"Calculating fair meeting areas…"));
+    loading.appendChild(h("div",{style:"color:var(--sub);font-size:12px;text-align:center;max-width:220px;line-height:1.6"},"Drawing travel-time isochrones from each location and finding where they overlap"));
+    wrap.appendChild(loading);
+    return wrap;
+  }
+
+  // Error state
+  if(STATE.areaError) {
+    wrap.appendChild(h("div",{style:"color:var(--coral);background:var(--coral-l);border:1px solid rgba(201,64,64,.2);border-radius:11px;padding:14px;font-size:13px;line-height:1.5;margin-bottom:16px"},"⚠️ "+STATE.areaError));
+    const retry=h("button",{class:"btn-primary"},"Try Again");
+    retry.onclick=()=>loadAreas();
+    wrap.appendChild(retry);
+    return wrap;
+  }
+
+  const activeFriends=STATE.friends.filter(f=>f.coords);
+
+  // Area cards — multi-select
+  STATE.candidateAreas.forEach((area,i)=>{
+    const isSelected=STATE.selectedAreas.includes(i);
+    const card=h("div",{class:`area-card${isSelected?" selected":""}`});
+    card.onclick=()=>{
+      if(isSelected) STATE.selectedAreas=STATE.selectedAreas.filter(x=>x!==i);
+      else STATE.selectedAreas.push(i);
+      render();
+    };
+
+    const header=h("div",{style:"display:flex;justify-content:space-between;align-items:flex-start"});
+    header.append(
+      h("div",{},
+        h("div",{class:"area-name"}, (isSelected?"✓ ":"")+area.label),
+        h("div",{class:"area-meta"},`Reachable within ~${area.mins} min drive`)
+      ),
+      h("div",{style:`width:46px;height:46px;border-radius:23px;background:${isSelected?"var(--accent)":"var(--bg-deep)"};border:2px solid ${isSelected?"var(--accent)":"var(--border)"};display:flex;align-items:center;justify-content:center;font-weight:900;font-size:13px;color:${isSelected?"white":"var(--muted)"};flex-shrink:0;transition:all .18s`},area.fairness+"%")
+    );
+    card.appendChild(header);
+
+    // Per-friend time chips
+    const times=h("div",{class:"area-times"});
+    activeFriends.forEach((f,fi)=>{
+      const chip=h("div",{class:"area-time-chip",style:`background:${FRIEND_COLORS[fi]}18;border-color:${FRIEND_COLORS[fi]}44;color:${FRIEND_COLORS[fi]}`},f.name+": ~"+area.times[fi]+"min");
+      times.appendChild(chip);
+    });
+    card.appendChild(times);
+    wrap.appendChild(card);
+  });
+
+  // Selection hint
+  wrap.appendChild(h("div",{style:"color:var(--sub);font-size:12px;text-align:center;margin:10px 0 16px;line-height:1.5"},STATE.selectedAreas.length>0?`${STATE.selectedAreas.length} area${STATE.selectedAreas.length>1?"s":""} selected — we'll search all of them`:"Tap areas to select. Multiple selections will be combined."));
+
+  const nextBtn=h("button",{class:"btn-primary"},STATE.selectedAreas.length>0?"Search Venues in Selected Areas →":"Search Venues in Top Area →");
   nextBtn.onclick=()=>loadResults();
   wrap.appendChild(nextBtn);
   return wrap;
 }
 
-async function loadResults() {
-  // Keep midpt null until fetch completes — this keeps the spinner showing
-  setState({screen:"results", venues:[], midpt:null, activeTab:"list", venueError:""});
-  render();
 
-  const activeFriends = STATE.friends.filter(f=>f.coords);
-  const mp = midpoint(activeFriends.map(f=>f.coords));
-
-  // Scale radius: half the distance between farthest friends, clamped 1–15 km
-  let maxDist = 0;
-  for (let a=0; a<activeFriends.length; a++) {
-    for (let b=a+1; b<activeFriends.length; b++) {
-      const d = haversineKm(activeFriends[a].coords, activeFriends[b].coords);
-      if (d > maxDist) maxDist = d;
-    }
-  }
-  const radiusM = Math.round(Math.min(Math.max(maxDist * 500, 1500), 15000));
-  STATE._lastRadiusM = radiusM;
-
-  try {
-    const vs = await fetchVenues(mp.lat, mp.lng, STATE.categories, radiusM);
-    STATE.venues   = vs;
-    STATE.midpt    = mp;  // set AFTER fetch — this exits the spinner
-  } catch(e) {
-    STATE.midpt    = mp;  // still exit spinner so user sees the error
-    STATE.venues   = [];
-    STATE.venueError = "Could not load venues (" + (e.message||"network error") + "). Check your connection and try again.";
-    console.error("Venue fetch error", e);
-  }
-  render();
-}
 
 function renderResults() {
   const wrap=h("div",{});
@@ -1100,8 +1354,8 @@ function renderResults() {
   if (!STATE.midpt) {
     const loading=h("div",{style:"display:flex;flex-direction:column;align-items:center;justify-content:center;height:420px;gap:16px"});
     loading.appendChild(h("div",{class:"spin",style:"width:48px;height:48px;border-width:3px"}));
-    loading.appendChild(h("div",{style:"font-weight:700;font-size:15px"},"Finding your midpoint…"));
-    loading.appendChild(h("div",{style:"color:var(--sub);font-size:12px;text-align:center;max-width:220px"},"Geocoding locations & fetching live venues from OpenStreetMap"));
+    loading.appendChild(h("div",{style:"font-weight:700;font-size:15px"},"Searching for venues…"));
+    loading.appendChild(h("div",{style:"color:var(--sub);font-size:12px;text-align:center;max-width:220px"},"Fetching real venues in your chosen area from OpenStreetMap"));
     wrap.appendChild(loading);
     return wrap;
   }
@@ -1272,7 +1526,7 @@ function render() {
     const backBtn=h("button",{class:"nav-btn"},"← Back");
     backBtn.onclick=()=>{
       if(_mapInstance){_mapInstance.remove();_mapInstance=null;}
-      const prev={friends:"home",categories:"friends",results:"categories"};
+      const prev={friends:"home",categories:"friends",areas:"categories",results:"areas"};
       setState({screen:prev[STATE.screen]||"home"});
       render();
     };
@@ -1286,6 +1540,7 @@ function render() {
   if      (STATE.screen==="home")       content=renderHome();
   else if (STATE.screen==="friends")    content=renderFriends();
   else if (STATE.screen==="categories") content=renderCategories();
+  else if (STATE.screen==="areas")      content=renderAreas();
   else if (STATE.screen==="results")    content=renderResults();
 
   if (content) scr.appendChild(content);
