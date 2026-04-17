@@ -352,14 +352,12 @@ async function fetchOverpassVenues(lat, lng, catIds, radius=2000) {
     const [k,v] = cat.osm.split("=");
     return `node["${k}"="${v}"](around:${radius},${lat},${lng});way["${k}"="${v}"](around:${radius},${lat},${lng});`;
   }).join("\n");
-  const query = `[out:json][timeout:20];(${filters});out center 40;`;
-  const formData = new URLSearchParams();
-  formData.append("data", query);
-  const r = await fetch("https://overpass-api.de/api/interpreter", {
-    method:"POST",
-    headers:{"Content-Type":"application/x-www-form-urlencoded"},
-    body:formData.toString()
-  });
+  const query = `[out:json][timeout:25];(${filters});out center 50;`;
+  // Use GET with encoded query param — no custom headers means no CORS preflight,
+  // which is what Safari requires for cross-origin requests to Overpass.
+  const url = "https://overpass-api.de/api/interpreter?data=" + encodeURIComponent(query);
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("Overpass HTTP " + r.status);
   const data = await r.json();
   return data.elements.map(el => {
     const elLat = el.lat ?? el.center?.lat;
@@ -679,7 +677,7 @@ function buildContactModal(sheet, {index}) {
   sheet.appendChild(hdr);
 
   // Try native Contacts API (iOS Safari 14.5+, some Android)
-  const hasContactsApi = (typeof navigator.contacts !== "undefined" && typeof ContactsManager !== "undefined");
+  const hasContactsApi = ("contacts" in navigator && "select" in (navigator.contacts || {}));
 
   if (hasContactsApi) {
     const nativeBtn = h("button",{class:"btn-primary",style:"margin-bottom:12px"},"📇 Pick from Contacts App");
@@ -1012,29 +1010,31 @@ function renderCategories() {
 }
 
 async function loadResults() {
+  // Keep midpt null until fetch completes — this keeps the spinner showing
   setState({screen:"results", venues:[], midpt:null, activeTab:"list", venueError:""});
   render();
 
-  const activeFriends=STATE.friends.filter(f=>f.coords);
-  const mp=midpoint(activeFriends.map(f=>f.coords));
-  STATE.midpt=mp;
+  const activeFriends = STATE.friends.filter(f=>f.coords);
+  const mp = midpoint(activeFriends.map(f=>f.coords));
+
+  // Scale radius: half the distance between farthest friends, clamped 1–15 km
+  let maxDist = 0;
+  for (let a=0; a<activeFriends.length; a++) {
+    for (let b=a+1; b<activeFriends.length; b++) {
+      const d = haversineKm(activeFriends[a].coords, activeFriends[b].coords);
+      if (d > maxDist) maxDist = d;
+    }
+  }
+  const radiusM = Math.round(Math.min(Math.max(maxDist * 500, 1500), 15000));
 
   try {
-    // Scale search radius: half the max distance between any two friends, min 1km, max 15km
-    const activeFr = STATE.friends.filter(f=>f.coords);
-    let maxDist = 0;
-    for (let a=0; a<activeFr.length; a++) {
-      for (let b=a+1; b<activeFr.length; b++) {
-        const d = haversineKm(activeFr[a].coords, activeFr[b].coords);
-        if (d > maxDist) maxDist = d;
-      }
-    }
-    const radiusM = Math.round(Math.min(Math.max(maxDist * 500, 1000), 15000));
-    const vs=await fetchOverpassVenues(mp.lat,mp.lng,STATE.categories,radiusM);
-    STATE.venues=vs;
+    const vs = await fetchOverpassVenues(mp.lat, mp.lng, STATE.categories, radiusM);
+    STATE.venues   = vs;
+    STATE.midpt    = mp;  // set AFTER fetch — this exits the spinner
   } catch(e) {
-    STATE.venues=[];
-    STATE.venueError = "Could not load venues: " + (e.message||"network error") + ". Check your connection and try again.";
+    STATE.midpt    = mp;  // still exit spinner so user sees the error
+    STATE.venues   = [];
+    STATE.venueError = "Could not load venues (" + (e.message||"network error") + "). Check your connection and try again.";
     console.error("Overpass error", e);
   }
   render();
