@@ -627,9 +627,11 @@ function buildAutocomplete({placeholder, initialValue="", onSelect, onInput}) {
   let results = [];
   let chosen  = null;
   let acTimer = null;  // local to this instance — fixes multi-widget interference
+  // Unique id to prevent Safari native autocomplete from cross-contaminating instances
+  const uid = "ac_" + Math.random().toString(36).slice(2);
 
   const inpWrap = h("div", {class:"inp-wrap"});
-  const inp = h("input", {class:"inp", placeholder, value:initialValue, type:"text", autocomplete:"street-address", autocorrect:"off", autocapitalize:"words", spellcheck:"false"});
+  const inp = h("input", {class:"inp", placeholder, value:initialValue, type:"text", autocomplete:"off", autocorrect:"off", autocapitalize:"words", spellcheck:"false", name:uid});
   const check = h("span", {class:"inp-check", style:"display:none"}, "✓");
   const drop = h("div", {class:"ac-list", style:"display:none"});
   inpWrap.append(inp, check, drop);
@@ -837,7 +839,7 @@ function buildLocationModal(sheet, {index}) {
 
   // Name field
   sheet.appendChild(h("div", {style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px"}, "Name"));
-  const nameInp = h("input", {class:"inp", placeholder:"Friend\'s name", style:"margin-bottom:14px;display:block"});
+  const nameInp = h("input", {class:"inp", placeholder:"Friend\'s name", style:"margin-bottom:14px;display:block", autocomplete:"name", name:"friend_name_"+index, id:"friend_name_"+index});
   nameInp.value = f.name;
   sheet.appendChild(nameInp);
   sheet.appendChild(h("div", {style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px"}, "Location"));
