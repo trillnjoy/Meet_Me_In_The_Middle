@@ -837,20 +837,25 @@ function buildLocationModal(sheet, {index}) {
   );
   sheet.appendChild(hdr);
 
+  // Wrap in a form so Safari scopes autofill to this instance independently
+  const form = h("form", {name:"friend_form_"+index, autocomplete:"on"});
+  form.addEventListener("submit", e => e.preventDefault());
+  sheet.appendChild(form);
+
   // Name field
-  sheet.appendChild(h("div", {style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px"}, "Name"));
-  const nameInp = h("input", {class:"inp", placeholder:"Friend\'s name", style:"margin-bottom:14px;display:block"});
+  form.appendChild(h("div", {style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px"}, "Name"));
+  const nameInp = h("input", {class:"inp", placeholder:"Friend\'s name", style:"margin-bottom:14px;display:block", autocomplete:"name"});
   nameInp.value = f.name;
-  sheet.appendChild(nameInp);
-  sheet.appendChild(h("div", {style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px"}, "Location"));
+  form.appendChild(nameInp);
+  form.appendChild(h("div", {style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px"}, "Location"));
 
   // GPS button
   let gpsState = "idle";
   const gpsBtn = h("button", {style:"width:100%;background:var(--hi);border:1.5px solid var(--border);border-radius:11px;padding:11px;font-size:13px;font-weight:700;color:var(--sub);margin-bottom:8px;display:flex;align-items:center;justify-content:center;gap:7px;transition:all .15s"}, "📡 Use My Current Location");
-  sheet.appendChild(gpsBtn);
+  form.appendChild(gpsBtn);
 
   const gpsErr = h("div", {style:"display:none;color:var(--coral);font-size:12px;margin-bottom:8px;background:var(--coral-l);border-radius:8px;padding:8px 10px;line-height:1.4"});
-  sheet.appendChild(gpsErr);
+  form.appendChild(gpsErr);
 
   gpsBtn.onclick = () => {
     if (!navigator.geolocation) { gpsErr.textContent="⚠️ GPS not available in this browser."; gpsErr.style.display="block"; return; }
@@ -878,7 +883,7 @@ function buildLocationModal(sheet, {index}) {
   };
 
   // Divider
-  sheet.appendChild(h("div", {style:"display:flex;align-items:center;gap:8px;margin-bottom:10px"}, h("div",{style:"flex:1;height:1px;background:var(--border)"}), h("span",{style:"color:var(--muted);font-size:11px;font-weight:600"},"or search"), h("div",{style:"flex:1;height:1px;background:var(--border)"}) ));
+  form.appendChild(h("div", {style:"display:flex;align-items:center;gap:8px;margin-bottom:10px"}, h("div",{style:"flex:1;height:1px;background:var(--border)"}), h("span",{style:"color:var(--muted);font-size:11px;font-weight:600"},"or search"), h("div",{style:"flex:1;height:1px;background:var(--border)"}) ));
 
   // Autocomplete
   const ac = buildAutocomplete({
@@ -887,13 +892,12 @@ function buildLocationModal(sheet, {index}) {
     onSelect: r => { chosen = r; updateSave(); },
     onInput: () => { chosen = null; updateSave(); },
   });
-  sheet.appendChild(ac.el);
+  form.appendChild(ac.el);
 
   // Save button
-  const saveBtn = h("button", {class:"btn-primary", style:"margin-top:16px"}, chosen ? "Save ✓" : "Search or use GPS to set location");
-  // Can save if: location is already confirmed (chosen set from existing coords), OR user picks a new one
+  const saveBtn = h("button", {class:"btn-primary", style:"margin-top:16px", type:"button"}, chosen ? "Save ✓" : "Search or use GPS to set location");
   saveBtn.disabled = !chosen;
-  sheet.appendChild(saveBtn);
+  form.appendChild(saveBtn);
 
   function updateSave() {
     saveBtn.disabled = !chosen;
