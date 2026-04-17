@@ -360,7 +360,7 @@ function avatarEl(f, size=44) {
 /* ══════════════════════════════════════════════════════════════
    APIS
 ══════════════════════════════════════════════════════════════ */
-let _acTimer = null;
+
 async function nominatimSearch(query) {
   // Include addresses and POIs; exclude pure admin boundaries (country/state level)
   const url = "https://nominatim.openstreetmap.org/search"
@@ -505,12 +505,13 @@ async function findCandidateAreas() {
     }
 
     // Score each point by travel-time fairness (using haversine estimate for now)
+    const isoBbox = [bbox[0], bbox[1], bbox[2], bbox[3]]; // [minLng, minLat, maxLng, maxLat]
     for (let pi = 0; pi < pts.length; pi++) {
       const pt = pts[pi];
       const times = activeFriends.map(f => estimateMins(f.coords, pt, STATE.travelMode));
       const mx = Math.max(...times), mn = Math.min(...times);
       const fairness = mx > 0 ? Math.round((1 - (mx - mn) / mx) * 100) : 100;
-      candidatePoints.push({ lat: pt.lat, lng: pt.lng, times, fairness, mins });
+      candidatePoints.push({ lat: pt.lat, lng: pt.lng, times, fairness, mins, bbox: isoBbox });
     }
 
     // If we have enough candidates, stop stepping up
@@ -541,7 +542,17 @@ async function findCandidateAreas() {
 }
 
 
-async function fetchVenues(lat, lng, catIds, radius=2000) {
+async function fetchVenues(lat, lng, catIds, bbox) {
+  // Use the ORS isochrone bbox as the Nominatim viewbox when available.
+  // bbox = [minLng, minLat, maxLng, maxLat]. Falls back to 4km radius box.
+  let viewbox;
+  if (bbox) {
+    viewbox = bbox.join(",");
+  } else {
+    const deg = (4000 / 111000) * 1.5;
+    viewbox = [lng-deg, lat-deg, lng+deg, lat+deg].join(",");
+  }
+
   // Nominatim free-text search bounded to a viewbox around the midpoint.
   // ?q= is the only reliably supported search parameter across all result types.
   // amenity=/leisure= as standalone params return 400 — confirmed in production.
@@ -557,10 +568,6 @@ async function fetchVenues(lat, lng, catIds, radius=2000) {
     cinema:     "cinema",
     nightclub:  "nightclub",
   };
-
-  // Bounding box from radius (1 deg lat ≈ 111km)
-  const deg = (radius / 111000) * 1.5;
-  const viewbox = [lng-deg, lat-deg, lng+deg, lat+deg].join(",");
 
   const results = [];
   const seen = new Set();
@@ -619,6 +626,7 @@ async function fetchVenues(lat, lng, catIds, radius=2000) {
 function buildAutocomplete({placeholder, initialValue="", onSelect, onInput}) {
   let results = [];
   let chosen  = null;
+  let acTimer = null;  // local to this instance — fixes multi-widget interference
 
   const inpWrap = h("div", {class:"inp-wrap"});
   const inp = h("input", {class:"inp", placeholder, value:initialValue, type:"text", autocomplete:"street-address", autocorrect:"off", autocapitalize:"words", spellcheck:"false"});
@@ -649,9 +657,9 @@ function buildAutocomplete({placeholder, initialValue="", onSelect, onInput}) {
     const val = inp.value.trim();
     chosen = null; check.style.display = "none"; inp.classList.remove("confirmed");
     if (onInput) onInput(val);
-    clearTimeout(_acTimer);
+    clearTimeout(acTimer);
     if (val.length < 3) { drop.style.display = "none"; return; }
-    _acTimer = setTimeout(async () => {
+    acTimer = setTimeout(async () => {
       try { results = await nominatimSearch(val); showDrop(); }
       catch { /* network error */ }
     }, 400);
@@ -1252,27 +1260,26 @@ async function loadAreas() {
 }
 
 async function loadResults() {
-  // Called after area selection — midpt is the centroid of selected area(s)
-  const chosen = STATE.selectedAreas.length > 0
+  // Use the highest-fairness selected area as the search center.
+  // Averaging multiple selected centroids pulls the point away from all of them.
+  const candidates = STATE.selectedAreas.length > 0
     ? STATE.selectedAreas.map(i => STATE.candidateAreas[i])
     : STATE.candidateAreas.slice(0,1);
 
-  // Centroid of chosen areas
-  const mp = {
-    lat: chosen.reduce((s,a)=>s+a.lat,0)/chosen.length,
-    lng: chosen.reduce((s,a)=>s+a.lng,0)/chosen.length,
-  };
+  // Pick the single best-fairness candidate as the search anchor
+  const best = candidates.reduce((a, b) => b.fairness > a.fairness ? b : a);
+  const mp = { lat: best.lat, lng: best.lng };
 
   setState({screen:"results", venues:[], midpt:null, activeTab:"list", venueError:""});
   render();
 
   const activeFriends = STATE.friends.filter(f=>f.coords);
-  // Fixed 3km radius — user already chose the area; sweep the whole neighborhood
-  const radiusM = 3000;
-  STATE._lastRadiusM = radiusM;
+  // Use the isochrone bbox of the best candidate for venue search
+  const venueBbox = best.bbox || null;
+  STATE._lastRadiusM = 4000; // for display purposes only
 
   try {
-    const vs=await fetchVenues(mp.lat,mp.lng,STATE.categories,radiusM);
+    const vs=await fetchVenues(mp.lat, mp.lng, STATE.categories, venueBbox);
     STATE.venues=vs;
     STATE.midpt=mp;
   } catch(e) {
