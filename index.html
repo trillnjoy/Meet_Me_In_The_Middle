@@ -263,6 +263,7 @@ let STATE = {
   activeTab: "list",
   venueFilter: "all",
   venueError: "",
+  _lastRadiusM: 3000,
   modal: null,   // null | "avatar" | "location" | "contact" | "info" | "venue"
   modalData: {}, // context for open modal
   mapInstance: null,
@@ -353,29 +354,79 @@ async function fetchOverpassVenues(lat, lng, catIds, radius=2000) {
     return `node["${k}"="${v}"](around:${radius},${lat},${lng});way["${k}"="${v}"](around:${radius},${lat},${lng});`;
   }).join("\n");
   const query = `[out:json][timeout:25];(${filters});out center 50;`;
-  // Use GET with encoded query param — no custom headers means no CORS preflight,
-  // which is what Safari requires for cross-origin requests to Overpass.
-  const url = "https://overpass-api.de/api/interpreter?data=" + encodeURIComponent(query);
-  const r = await fetch(url);
-  if (!r.ok) throw new Error("Overpass HTTP " + r.status);
-  const data = await r.json();
-  return data.elements.map(el => {
-    const elLat = el.lat ?? el.center?.lat;
-    const elLng = el.lon ?? el.center?.lon;
-    const tags  = el.tags||{};
-    let catId   = "restaurant";
-    for (const cat of CATEGORIES) { const [k,v]=cat.osm.split("="); if(tags[k]===v){catId=cat.id;break;} }
-    const cat   = CATEGORIES.find(c=>c.id===catId);
-    return {
-      id: el.id, name: tags.name||"Unnamed", cat: catId, icon: cat?.icon||"📍",
-      lat: elLat, lng: elLng,
-      address: [tags["addr:housenumber"],tags["addr:street"],tags["addr:city"]].filter(Boolean).join(" ")||"",
-      phone: tags.phone||tags["contact:phone"]||"",
-      website: tags.website||tags["contact:website"]||"",
-      cuisine: (tags.cuisine||"").replace(/_/g," "),
-      opening: tags.opening_hours||"",
-    };
-  }).filter(v=>v.lat&&v.lng&&v.name!=="Unnamed").slice(0,50);
+
+  // Try multiple public Overpass mirrors — each has slightly different CORS behaviour.
+  // Simple GET with no custom headers avoids any preflight on all of them.
+  const mirrors = [
+    "https://overpass.private.coffee/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass-api.de/api/interpreter",
+  ];
+
+  let lastErr = null;
+  for (const base of mirrors) {
+    try {
+      const url = base + "?data=" + encodeURIComponent(query);
+      const r = await fetch(url, {mode:"cors"});
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const data = await r.json();
+      if (!data.elements) throw new Error("No elements in response");
+      return data.elements.map(el => {
+        const elLat = el.lat ?? el.center?.lat;
+        const elLng = el.lon ?? el.center?.lon;
+        const tags  = el.tags||{};
+        let catId   = catIds[0] || "restaurant";
+        for (const cat of CATEGORIES) { const [k,v]=cat.osm.split("="); if(tags[k]===v){catId=cat.id;break;} }
+        const cat   = CATEGORIES.find(c=>c.id===catId);
+        return {
+          id: el.id, name: tags.name||"", cat: catId, icon: cat?.icon||"📍",
+          lat: elLat, lng: elLng,
+          address: [tags["addr:housenumber"],tags["addr:street"],tags["addr:city"]].filter(Boolean).join(" ")||"",
+          phone: tags.phone||tags["contact:phone"]||"",
+          website: tags.website||tags["contact:website"]||"",
+          cuisine: (tags.cuisine||"").replace(/_/g," "),
+          opening: tags.opening_hours||"",
+        };
+      }).filter(v=>v.lat&&v.lng&&v.name);
+    } catch(e) {
+      lastErr = e;
+      console.warn("Mirror failed:", base, e.message);
+    }
+  }
+
+  // All Overpass mirrors failed — fall back to Nominatim search per category
+  console.warn("All Overpass mirrors failed, using Nominatim fallback. Last error:", lastErr?.message);
+  const results = [];
+  for (const id of catIds.slice(0,4)) {
+    const cat = CATEGORIES.find(c=>c.id===id);
+    if (!cat) continue;
+    try {
+      const term = cat.label.replace(" & ", " ");
+      const url = "https://nominatim.openstreetmap.org/search"
+        + "?q=" + encodeURIComponent(term)
+        + "&lat=" + lat + "&lon=" + lng
+        + "&bounded=0&limit=12&format=json&addressdetails=1"
+        + "&viewbox=" + (lng-0.2) + "," + (lat-0.2) + "," + (lng+0.2) + "," + (lat+0.2);
+      const r = await fetch(url);
+      const data = await r.json();
+      data.forEach(d => {
+        if (!d.lat || !d.lon || !d.display_name) return;
+        const a = d.address||{};
+        const name = a.amenity||a.shop||a.tourism||a.leisure||d.display_name.split(",")[0];
+        results.push({
+          id: d.place_id, name, cat: id, icon: cat.icon,
+          lat: +d.lat, lng: +d.lon,
+          address: [a.house_number, a.road, a.city||a.town||a.village].filter(Boolean).join(" ")||"",
+          phone:"", website:"", cuisine:"", opening:"",
+        });
+      });
+    } catch(e) { console.warn("Nominatim fallback failed for", id, e); }
+  }
+  if (results.length === 0) throw new Error("Could not reach any venue data source. Check your internet connection.");
+  return results;
+
+  // (unreachable — original map moved into mirror loop above)
+  const data = {elements:[]};
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -1026,6 +1077,7 @@ async function loadResults() {
     }
   }
   const radiusM = Math.round(Math.min(Math.max(maxDist * 500, 1500), 15000));
+  STATE._lastRadiusM = radiusM;
 
   try {
     const vs = await fetchOverpassVenues(mp.lat, mp.lng, STATE.categories, radiusM);
@@ -1107,8 +1159,23 @@ function renderResults() {
     content.appendChild(filterRow);
 
     const shown=STATE.venueFilter==="all"?STATE.venues:STATE.venues.filter(v=>v.cat===STATE.venueFilter);
-    if(STATE.venueError) content.appendChild(h("div",{style:"color:var(--coral);background:var(--coral-l);border:1px solid rgba(201,64,64,.2);border-radius:11px;padding:14px;font-size:13px;line-height:1.5;margin-bottom:12px"},"⚠️ "+STATE.venueError));
-    if(shown.length===0&&!STATE.venueError) content.appendChild(h("div",{style:"color:var(--sub);text-align:center;padding:40px 0;font-size:13px"},STATE.venues.length===0?"No venues found near your midpoint. Try different categories or a wider area.":"No venues for this category."));
+    if(STATE.venueError) {
+      content.appendChild(h("div",{style:"color:var(--coral);background:var(--coral-l);border:1px solid rgba(201,64,64,.2);border-radius:11px;padding:14px;font-size:13px;line-height:1.5;margin-bottom:12px"},"⚠️ "+STATE.venueError));
+    }
+    if(shown.length===0) {
+      const msg = STATE.venueError ? "" :
+        STATE.venues.length===0
+          ? "No venues found near your midpoint (searched "+Math.round(STATE._lastRadiusM/1000)+"km radius). Try adding more categories or check the map tab."
+          : "No venues for this category.";
+      if(msg) content.appendChild(h("div",{style:"color:var(--sub);text-align:center;padding:40px 0;font-size:13px"},msg));
+
+      // Retry button
+      if(!STATE.venueError) {
+        const retry = h("button",{class:"btn-primary",style:"max-width:240px;margin:0 auto;display:block"},"🔄 Try Again");
+        retry.onclick = () => loadResults();
+        content.appendChild(retry);
+      }
+    }
 
     shown.slice(0,30).forEach(v=>{
       const times=activeFriends.map(f=>estimateMins(f.coords,{lat:v.lat,lng:v.lng},STATE.travelMode));
