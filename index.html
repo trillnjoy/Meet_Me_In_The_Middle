@@ -839,7 +839,7 @@ function buildLocationModal(sheet, {index}) {
 
   // Name field
   sheet.appendChild(h("div", {style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px"}, "Name"));
-  const nameInp = h("input", {class:"inp", placeholder:"Friend\'s name", style:"margin-bottom:14px;display:block", autocomplete:"name", name:"friend_name_"+index, id:"friend_name_"+index});
+  const nameInp = h("input", {class:"inp", placeholder:"Friend\'s name", style:"margin-bottom:14px;display:block", name:"friend_name_"+index, id:"friend_name_"+index, autocorrect:"off"});
   nameInp.value = f.name;
   sheet.appendChild(nameInp);
   sheet.appendChild(h("div", {style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px"}, "Location"));
