@@ -263,6 +263,7 @@ let STATE = {
   saved: [],
   activeTab: "list",
   venueFilter: "all",
+  venueError: "",
   modal: null,   // null | "avatar" | "location" | "contact" | "info" | "venue"
   modalData: {}, // context for open modal
   mapInstance: null,
@@ -353,7 +354,13 @@ async function fetchOverpassVenues(lat, lng, catIds, radius=2000) {
     return `node["${k}"="${v}"](around:${radius},${lat},${lng});way["${k}"="${v}"](around:${radius},${lat},${lng});`;
   }).join("\n");
   const query = `[out:json][timeout:20];(${filters});out center 40;`;
-  const r = await fetch("https://overpass-api.de/api/interpreter", {method:"POST", body:query});
+  const formData = new URLSearchParams();
+  formData.append("data", query);
+  const r = await fetch("https://overpass-api.de/api/interpreter", {
+    method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:formData.toString()
+  });
   const data = await r.json();
   return data.elements.map(el => {
     const elLat = el.lat ?? el.center?.lat;
@@ -578,10 +585,17 @@ function buildLocationModal(sheet, {index}) {
   const hdr = h("div", {style:"display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"});
   const avEl = avatarEl(f, 36);
   hdr.append(
-    h("div", {style:"display:flex;align-items:center;gap:10px"}, avEl, h("div", {class:"sheet-title"}, `Set Location for ${f.name}`)),
+    h("div", {style:"display:flex;align-items:center;gap:10px"}, avEl, h("div", {class:"sheet-title"}, "Edit Friend")),
     closeBtn()
   );
   sheet.appendChild(hdr);
+
+  // Name field
+  sheet.appendChild(h("div", {style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px"}, "Name"));
+  const nameInp = h("input", {class:"inp", placeholder:"Friend\'s name", style:"margin-bottom:14px;display:block"});
+  nameInp.value = f.name;
+  sheet.appendChild(nameInp);
+  sheet.appendChild(h("div", {style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px"}, "Location"));
 
   // GPS button
   let gpsState = "idle";
@@ -633,10 +647,11 @@ function buildLocationModal(sheet, {index}) {
   saveBtn.disabled = !chosen;
   sheet.appendChild(saveBtn);
 
-  function updateSave() { saveBtn.disabled = !chosen; }
+  function updateSave() { saveBtn.disabled = !chosen; saveBtn.textContent = chosen ? "Save ✓" : "Search or use GPS to set location"; }
 
   saveBtn.onclick = () => {
-    STATE.friends[index] = {...f, location:chosen.label, coords:{lat:chosen.lat, lng:chosen.lng}};
+    const newName = nameInp.value.trim() || f.name;
+    STATE.friends[index] = {...f, name:newName, location:chosen.label, coords:{lat:chosen.lat, lng:chosen.lng}};
     closeModal();
     render();
   };
@@ -935,7 +950,7 @@ function renderCategories() {
 }
 
 async function loadResults() {
-  setState({screen:"results", venues:[], midpt:null, activeTab:"list"});
+  setState({screen:"results", venues:[], midpt:null, activeTab:"list", venueError:""});
   render();
 
   const activeFriends=STATE.friends.filter(f=>f.coords);
@@ -947,7 +962,8 @@ async function loadResults() {
     STATE.venues=vs;
   } catch(e) {
     STATE.venues=[];
-    console.error("Overpass error",e);
+    STATE.venueError = "Could not load venues: " + (e.message||"network error") + ". Check your connection and try again.";
+    console.error("Overpass error", e);
   }
   render();
 }
@@ -1019,7 +1035,8 @@ function renderResults() {
     content.appendChild(filterRow);
 
     const shown=STATE.venueFilter==="all"?STATE.venues:STATE.venues.filter(v=>v.cat===STATE.venueFilter);
-    if(shown.length===0) content.appendChild(h("div",{style:"color:var(--sub);text-align:center;padding:40px 0;font-size:13px"},STATE.venues.length===0?"No venues found near your midpoint. Try different categories or a wider area.":"No venues for this category."));
+    if(STATE.venueError) content.appendChild(h("div",{style:"color:var(--coral);background:var(--coral-l);border:1px solid rgba(201,64,64,.2);border-radius:11px;padding:14px;font-size:13px;line-height:1.5;margin-bottom:12px"},"⚠️ "+STATE.venueError));
+    if(shown.length===0&&!STATE.venueError) content.appendChild(h("div",{style:"color:var(--sub);text-align:center;padding:40px 0;font-size:13px"},STATE.venues.length===0?"No venues found near your midpoint. Try different categories or a wider area.":"No venues for this category."));
 
     shown.slice(0,30).forEach(v=>{
       const times=activeFriends.map(f=>estimateMins(f.coords,{lat:v.lat,lng:v.lng},STATE.travelMode));
