@@ -285,8 +285,13 @@ function h(tag, attrs={}, ...children) {
     else el.setAttribute(k, v);
   }
   for (const c of children.flat()) {
-    if (c == null || c === false) continue;
-    el.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    if (c == null || c === false || c === undefined) continue;
+    if (typeof c === "string" || typeof c === "number") {
+      el.appendChild(document.createTextNode(String(c)));
+    } else if (c instanceof Node) {
+      el.appendChild(c);
+    }
+    // silently drop anything else (avoids TypeError on undefined/object)
   }
   return el;
 }
@@ -1181,11 +1186,11 @@ function renderResults() {
       const top=h("div",{style:"display:flex;justify-content:space-between;margin-bottom:8px"});
       const left=h("div",{style:"display:flex;gap:10px;flex:1"});
       left.append(
-        h("div",{class:"venue-icon-box"},v.icon),
+        h("div",{class:"venue-icon-box"}, v.icon || "📍"),
         h("div",{style:"flex:1"},
           h("div",{style:"font-weight:700;font-size:14px"},v.name),
           h("div",{style:"color:var(--sub);font-size:11px;margin-top:1px"},
-            (v.cuisine?v.cuisine+" · ":"")+(v.address||CATEGORIES.find(c=>c.id===v.cat)?.label||"")
+            (v.cuisine ? v.cuisine+" · " : "") + (v.address || CATEGORIES.find(c=>c.id===v.cat)?.label || "")
           )
         )
       );
@@ -1197,7 +1202,7 @@ function renderResults() {
       // Fairness
       const fairSec=h("div",{});
       const fairHdr=h("div",{style:"display:flex;justify-content:space-between;margin-bottom:4px"});
-      fairHdr.append(h("div",{style:"color:var(--sub);font-size:10px;font-weight:700;letter-spacing:.05em"},"TRAVEL FAIRNESS"),h("span",{class:`fairness-pct ${pct>80?"hi":pct>60?"md":"lo"}`},pct+"%"));
+      fairHdr.append(h("div",{style:"color:var(--sub);font-size:10px;font-weight:700;letter-spacing:.05em"},"TRAVEL FAIRNESS"),h("span",{class:`fairness-pct ${pct>80?"hi":pct>60?"md":"lo"}`},String(pct)+"%"));
       fairSec.appendChild(fairHdr);
       fairSec.appendChild(buildFairnessBar(times,colors));
       const tLabels=h("div",{style:"display:flex;gap:9px;margin-top:4px;flex-wrap:wrap"});
