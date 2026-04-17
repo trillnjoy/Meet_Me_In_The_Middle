@@ -542,20 +542,14 @@ async function findCandidateAreas() {
 }
 
 
-async function fetchVenues(lat, lng, catIds, bbox) {
-  // Use the ORS isochrone bbox as the Nominatim viewbox when available.
-  // bbox = [minLng, minLat, maxLng, maxLat]. Falls back to 4km radius box.
-  let viewbox;
-  if (bbox) {
-    viewbox = bbox.join(",");
-  } else {
-    const deg = (4000 / 111000) * 1.5;
-    viewbox = [lng-deg, lat-deg, lng+deg, lat+deg].join(",");
-  }
-
+async function fetchVenues(lat, lng, catIds) {
   // Nominatim free-text search bounded to a viewbox around the midpoint.
   // ?q= is the only reliably supported search parameter across all result types.
   // amenity=/leisure= as standalone params return 400 — confirmed in production.
+  // Use a 2.5km radius — large enough to reach the nearest commercial corridor
+  // from a residential midpoint, small enough to stay in the right neighborhood.
+  const deg = (2500 / 111000) * 1.5;
+  const viewbox = [lng-deg, lat-deg, lng+deg, lat+deg].join(",");
   const SEARCH_TERMS = {
     restaurant: "restaurant",
     bar:        "bar",
@@ -1280,12 +1274,20 @@ async function loadResults() {
   render();
 
   const activeFriends = STATE.friends.filter(f=>f.coords);
-  // Use the isochrone bbox of the best candidate for venue search
-  const venueBbox = best.bbox || null;
-  STATE._lastRadiusM = 4000; // for display purposes only
+  STATE._lastRadiusM = 2500;
 
   try {
-    const vs=await fetchVenues(mp.lat, mp.lng, STATE.categories, venueBbox);
+    const vs = await fetchVenues(mp.lat, mp.lng, STATE.categories);
+    const activeFriends = STATE.friends.filter(f=>f.coords);
+    // Sort: group by category (in user's selected order), then by fairness desc within each group
+    const catOrder = STATE.categories;
+    vs.sort((a, b) => {
+      const ai = catOrder.indexOf(a.cat), bi = catOrder.indexOf(b.cat);
+      if (ai !== bi) return ai - bi;
+      const aF = fairnessPct(activeFriends.map(f => estimateMins(f.coords, {lat:a.lat,lng:a.lng}, STATE.travelMode)));
+      const bF = fairnessPct(activeFriends.map(f => estimateMins(f.coords, {lat:b.lat,lng:b.lng}, STATE.travelMode)));
+      return bF - aF;
+    });
     STATE.venues=vs;
     STATE.midpt=mp;
   } catch(e) {
