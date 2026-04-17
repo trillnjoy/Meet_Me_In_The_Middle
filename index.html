@@ -1,0 +1,1159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<meta name="theme-color" content="#1A7F5A"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+<meta name="apple-mobile-web-app-title" content="MMITM"/>
+<link rel="manifest" href="manifest.json"/>
+<link rel="apple-touch-icon" href="icons/icon-192.png"/>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<title>Meet Me In The Middle</title>
+
+<style>
+/* ── Reset & base ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #F7F6F2; color: #1C1B18; -webkit-tap-highlight-color: transparent; }
+input, button, select, textarea { font-family: inherit; }
+button { cursor: pointer; border: none; background: none; }
+
+/* ── CSS variables ── */
+:root {
+  --bg:       #F7F6F2;
+  --bg-deep:  #EDEAE2;
+  --surface:  #FFFFFF;
+  --hi:       #F2F0EA;
+  --border:   #E0DDD5;
+  --border-m: #C8C4BA;
+  --accent:   #1A7F5A;
+  --accent-l: #E8F5EF;
+  --gold:     #A0721A;
+  --gold-l:   #FDF3DC;
+  --coral:    #C94040;
+  --coral-l:  #FDEAEA;
+  --muted:    #9B9688;
+  --text:     #1C1B18;
+  --sub:      #6B6860;
+  --sh:       rgba(0,0,0,0.07);
+  --sh-md:    rgba(0,0,0,0.14);
+  --f0: #1A7F5A; --f1: #2563EB; --f2: #E11D48; --f3: #9333EA;
+}
+
+/* ── App shell ── */
+#app { max-width: 430px; margin: 0 auto; min-height: 100vh; display: flex; flex-direction: column; background: var(--surface); box-shadow: 0 0 40px rgba(0,0,0,0.12); position: relative; overflow: hidden; }
+#screen { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+
+/* ── Status bar spacer (iOS safe area) ── */
+.status-bar { height: env(safe-area-inset-top, 44px); background: var(--surface); border-bottom: 1px solid var(--border); display: flex; align-items: flex-end; justify-content: space-between; padding: 0 20px 8px; font-size: 12px; font-weight: 700; }
+.home-indicator { height: calc(env(safe-area-inset-bottom, 0px) + 28px); background: var(--surface); border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.home-indicator-bar { width: 130px; height: 5px; border-radius: 3px; background: var(--border-m); opacity: 0.5; }
+
+/* ── Nav bar ── */
+.nav-bar { display: flex; align-items: center; justify-content: space-between; padding: 10px 15px; border-bottom: 1px solid var(--border); background: var(--surface); position: sticky; top: 0; z-index: 100; box-shadow: 0 1px 6px var(--sh); }
+.nav-title { font-size: 15px; font-weight: 800; font-family: Georgia, "Times New Roman", serif; color: var(--text); }
+.nav-title span { color: var(--accent); }
+.nav-btn { background: var(--hi); border: 1px solid var(--border); color: var(--sub); border-radius: 9px; padding: 6px 13px; font-size: 12px; font-weight: 600; }
+.nav-icon-btn { width: 32px; height: 32px; border-radius: 16px; background: var(--hi); border: 1px solid var(--border); color: var(--sub); font-size: 15px; display: flex; align-items: center; justify-content: center; transition: all .14s; }
+.nav-icon-btn:hover { background: var(--accent-l); color: var(--accent); border-color: var(--accent); }
+
+/* ── Screens ── */
+.screen-pad { padding: 22px 18px 100px; }
+.step-label { color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 4px; }
+.screen-title { font-size: 22px; font-weight: 800; margin-bottom: 4px; }
+.screen-sub { color: var(--sub); font-size: 13px; line-height: 1.5; margin-bottom: 20px; }
+
+/* ── Cards ── */
+.card { background: var(--surface); border: 1.5px solid var(--border); border-radius: 14px; padding: 14px 15px; box-shadow: 0 2px 8px var(--sh); transition: border-color .2s; }
+.card.confirmed { border-color: var(--accent); }
+
+/* ── Pills ── */
+.pills { display: flex; gap: 7px; flex-wrap: wrap; }
+.pill { background: var(--surface); border: 1.5px solid var(--border); color: var(--sub); border-radius: 99px; padding: 6px 14px; font-size: 12px; font-weight: 600; white-space: nowrap; box-shadow: 0 1px 3px var(--sh); transition: all .16s; }
+.pill.active { background: #1A7F5A18; color: var(--accent); border-color: var(--accent); }
+.pill:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ── Buttons ── */
+.btn-primary { width: 100%; background: var(--accent); color: #fff; border-radius: 13px; padding: 15px 0; font-size: 15px; font-weight: 800; box-shadow: 0 4px 20px rgba(26,127,90,.35); transition: transform .13s, opacity .13s; }
+.btn-primary:disabled { background: var(--hi); color: var(--muted); box-shadow: none; cursor: not-allowed; }
+.btn-primary:not(:disabled):active { transform: scale(0.97); }
+.btn-secondary { background: var(--hi); border: 1px solid var(--border); color: var(--sub); border-radius: 9px; padding: 6px 12px; font-size: 11px; font-weight: 700; transition: all .13s; }
+.btn-accent-outline { background: var(--accent-l); border: 1px solid rgba(26,127,90,.3); color: var(--accent); border-radius: 9px; padding: 6px 12px; font-size: 11px; font-weight: 700; }
+.btn-coral-outline { background: var(--coral-l); border: 1px solid rgba(201,64,64,.3); color: var(--coral); border-radius: 9px; padding: 5px 11px; font-size: 11px; }
+
+/* ── Category grid ── */
+.cat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cat-item { background: var(--surface); border: 1.5px solid var(--border); border-radius: 11px; padding: 11px; display: flex; align-items: center; gap: 8px; transition: all .15s; box-shadow: 0 1px 4px var(--sh); }
+.cat-item.on { background: var(--accent-l); border-color: var(--accent); }
+.cat-item .icon { font-size: 19px; }
+.cat-item .label { font-size: 12px; font-weight: 600; color: var(--sub); }
+.cat-item.on .label { color: var(--accent); }
+.cat-check { margin-left: auto; color: var(--accent); }
+
+/* ── Avatar ── */
+.avatar { border-radius: 50%; display: flex; align-items: center; justify-content: center; overflow: hidden; flex-shrink: 0; position: relative; }
+.avatar img { width: 100%; height: 100%; object-fit: cover; }
+.avatar .edit-badge { position: absolute; bottom: -2px; right: -2px; width: 17px; height: 17px; border-radius: 9px; background: #1C1B18; border: 2px solid var(--surface); display: flex; align-items: center; justify-content: center; font-size: 7px; }
+
+/* ── Modal overlay ── */
+.overlay { position: fixed; inset: 0; background: rgba(28,27,24,.42); display: flex; align-items: flex-end; justify-content: center; z-index: 500; backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); animation: fadein .2s; }
+.sheet { background: var(--surface); border-radius: 22px 22px 0 0; padding: 20px 20px 48px; width: 100%; max-width: 430px; max-height: 92vh; overflow-y: auto; box-shadow: 0 -6px 40px var(--sh-md); animation: slideup .26s cubic-bezier(.16,1,.3,1); }
+.drag-handle { width: 38px; height: 4px; border-radius: 2px; background: var(--border); margin: 0 auto 18px; }
+.sheet-title { font-size: 16px; font-weight: 800; color: var(--text); }
+@keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideup { from { transform: translateY(100%); } to { transform: translateY(0); } }
+
+/* ── Autocomplete ── */
+.ac-list { background: var(--surface); border: 1px solid var(--border); border-radius: 11px; overflow: hidden; box-shadow: 0 4px 16px var(--sh-md); margin-top: 4px; }
+.ac-item { width: 100%; background: transparent; border: none; border-bottom: 1px solid var(--border); padding: 10px 14px; text-align: left; cursor: pointer; color: var(--text); font-size: 13px; display: block; transition: background .1s; }
+.ac-item:last-child { border-bottom: none; }
+.ac-item:hover { background: var(--accent-l); }
+
+/* ── Inputs ── */
+.inp { width: 100%; background: var(--hi); border: 1.5px solid var(--border); border-radius: 10px; padding: 10px 12px; color: var(--text); font-size: 13px; outline: none; transition: border-color .15s; }
+.inp:focus { border-color: var(--accent); }
+.inp.confirmed { border-color: var(--accent); }
+.inp-wrap { position: relative; }
+.inp-check { position: absolute; right: 11px; top: 50%; transform: translateY(-50%); color: var(--accent); font-weight: 700; font-size: 14px; }
+
+/* ── Map ── */
+#map { height: 340px; border-radius: 14px; overflow: hidden; border: 1px solid var(--border); }
+.leaflet-container { font-family: inherit; }
+
+/* ── Fairness bar ── */
+.f-bar { display: flex; gap: 2px; height: 6px; border-radius: 4px; overflow: hidden; background: var(--bg-deep); }
+
+/* ── Spinner ── */
+.spin { display: inline-block; width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(26,127,90,.25); border-top-color: var(--accent); animation: spin .7s linear infinite; flex-shrink: 0; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Results banner ── */
+.banner { background: linear-gradient(135deg, rgba(26,127,90,.1), rgba(160,114,26,.06)); border-bottom: 1px solid var(--border); padding: 14px 18px; }
+.banner-label { color: var(--accent); font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.banner-title { font-size: 16px; font-weight: 800; }
+
+/* ── Tabs ── */
+.tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--surface); }
+.tab { flex: 1; background: transparent; border: none; border-bottom: 2.5px solid transparent; color: var(--sub); padding: 11px 4px; font-size: 13px; font-weight: 700; transition: all .16s; }
+.tab.active { border-bottom-color: var(--accent); color: var(--accent); }
+
+/* ── Venue card ── */
+.venue-card { background: var(--surface); border: 1.5px solid var(--border); border-radius: 13px; padding: 13px; margin-bottom: 9px; cursor: pointer; transition: all .16s; box-shadow: 0 2px 6px var(--sh); }
+.venue-card:hover, .venue-card.open { border-color: var(--accent); box-shadow: 0 4px 18px rgba(26,127,90,.14); }
+.venue-icon-box { width: 44px; height: 44px; border-radius: 11px; background: var(--hi); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 21px; flex-shrink: 0; }
+.fairness-pct { font-weight: 700; font-size: 11px; }
+.fairness-pct.hi { color: var(--accent); }
+.fairness-pct.md { color: var(--gold); }
+.fairness-pct.lo { color: var(--coral); }
+
+/* ── Home screen ── */
+.home-wrap { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px; position: relative; background: radial-gradient(ellipse at 25% 15%, rgba(26,127,90,.1) 0%, transparent 55%), var(--bg); }
+.home-icon { width: 90px; height: 90px; border-radius: 25px; background: linear-gradient(145deg, var(--accent-l), rgba(26,127,90,.2)); border: 2px solid rgba(26,127,90,.3); display: flex; align-items: center; justify-content: center; font-size: 44px; box-shadow: 0 6px 28px rgba(26,127,90,.18); margin: 0 auto 22px; }
+.home-title { font-family: Georgia, "Times New Roman", serif; font-size: 30px; font-weight: 700; line-height: 1.25; text-align: center; margin-bottom: 8px; }
+.home-sub { color: var(--sub); font-size: 14px; line-height: 1.65; text-align: center; max-width: 256px; margin: 0 auto 36px; }
+.feature-chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 36px; }
+.feature-chip { background: var(--surface); border: 1px solid var(--border); color: var(--sub); border-radius: 99px; padding: 5px 13px; font-size: 11px; font-weight: 600; box-shadow: 0 1px 4px var(--sh); }
+
+/* ── Info modal items ── */
+.info-item { border-radius: 11px; padding: 11px 13px; display: flex; gap: 11px; align-items: flex-start; margin-bottom: 8px; }
+.info-item.unique { background: var(--accent-l); border: 1.5px solid rgba(26,127,90,.3); border-left: 4px solid var(--accent); }
+.info-item.standard { background: var(--hi); border: 1.5px solid var(--border); border-left: 4px solid var(--border-m); }
+.only-badge { background: var(--accent); color: #fff; border-radius: 99px; font-size: 9px; font-weight: 800; padding: 2px 7px; text-transform: uppercase; }
+
+/* ── Progress bar ── */
+.progress-bars { display: flex; gap: 5px; margin-bottom: 10px; }
+.progress-bar { flex: 1; height: 4px; border-radius: 2px; transition: background .3s; }
+
+/* ── Vibes ── */
+.vibes { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.vibe-btn { flex-shrink: 0; border: 1.5px solid var(--border); border-radius: 13px; padding: 9px 13px; display: flex; flex-direction: column; align-items: center; gap: 4px; transition: all .15s; background: var(--surface); box-shadow: 0 1px 4px var(--sh); }
+.vibe-btn.on { background: var(--accent-l); border-color: var(--accent); }
+.vibe-btn .vibe-label { font-size: 10px; font-weight: 700; color: var(--sub); white-space: nowrap; }
+.vibe-btn.on .vibe-label { color: var(--accent); }
+
+/* ── Vote ── */
+.vote-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 8px; display: flex; gap: 10px; align-items: center; box-shadow: 0 1px 5px var(--sh); }
+.vote-btn { background: var(--hi); border: 1.5px solid var(--border); border-radius: 9px; padding: 7px 10px; font-size: 14px; transition: all .14s; }
+.vote-btn.up { background: var(--accent-l); border-color: var(--accent); }
+.vote-btn.down { background: var(--coral-l); border-color: var(--coral); }
+
+/* ── Schematic map ── */
+.schema-map { background: #D6EAD7; border-radius: 14px; height: 300px; position: relative; overflow: hidden; border: 1px solid var(--border); }
+.schema-road-h { position: absolute; left: 0; right: 0; height: 7px; background: #fff; opacity: .55; }
+.schema-road-v { position: absolute; top: 0; bottom: 0; width: 7px; background: #fff; opacity: .55; }
+.midpin { position: absolute; width: 22px; height: 22px; border-radius: 11px; background: var(--accent); border: 3px solid white; box-shadow: 0 0 14px rgba(26,127,90,.6); transform: translate(-50%,-50%); z-index: 10; }
+.midlabel { position: absolute; background: var(--surface); border: 1px solid var(--accent); border-radius: 6px; padding: 2px 7px; color: var(--accent); font-size: 9px; font-weight: 700; white-space: nowrap; transform: translate(-50%, calc(-100% - 6px)); }
+.friend-pin { position: absolute; border-radius: 50%; border: 2.5px solid white; display: flex; align-items: center; justify-content: center; font-size: 14px; overflow: hidden; transform: translate(-50%,-50%); box-shadow: 0 2px 8px rgba(0,0,0,.25); }
+.venue-pin { position: absolute; background: white; border: 1.5px solid var(--border); border-radius: 8px; padding: 3px 5px; font-size: 16px; cursor: pointer; box-shadow: 0 2px 6px var(--sh); transform: translate(-50%,-50%); transition: transform .13s; z-index: 5; }
+.venue-pin:hover { transform: translate(-50%,-50%) scale(1.18); }
+</style>
+</head>
+
+<body>
+<div id="app">
+  <div class="status-bar" id="statusBar">
+    <span>9:41</span>
+    <div style="width:100px;height:16px;border-radius:8px;background:rgba(0,0,0,.07)"></div>
+    <span style="opacity:.5">📶 🔋</span>
+  </div>
+  <div id="screen"></div>
+  <div class="home-indicator"><div class="home-indicator-bar"></div></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+"use strict";
+
+/* ══════════════════════════════════════════════════════════════
+   CONSTANTS
+══════════════════════════════════════════════════════════════ */
+const FRIEND_COLORS = ["#1A7F5A","#2563EB","#E11D48","#9333EA"];
+
+const AVATAR_OPTIONS = ["🧑","👩","🧔","👱","👨","👩‍🦱","👩‍🦰","🧑‍🦱","👴","👵","🧑‍🦳","🧑‍🦲","🧒","👧","👦","🧕","🐶","🐱","🦊","🐻","🐼","🦁","🐯","🐨","🌟","🔥","⚡","🌈","🎸","🎯","🚀","💎"];
+const COLOR_OPTIONS  = ["#1A7F5A","#2563EB","#9333EA","#E11D48","#EA580C","#CA8A04","#0891B2","#65A30D"];
+
+const CATEGORIES = [
+  { id:"restaurant", icon:"🍽️", label:"Restaurants",      osm:"amenity=restaurant" },
+  { id:"bar",        icon:"🍸", label:"Bars & Cocktails",  osm:"amenity=bar" },
+  { id:"cafe",       icon:"☕", label:"Coffee & Cafés",    osm:"amenity=cafe" },
+  { id:"golf",       icon:"⛳", label:"Golf Courses",      osm:"leisure=golf_course" },
+  { id:"spa",        icon:"🧖", label:"Day Spas",          osm:"leisure=spa" },
+  { id:"museum",     icon:"🏛️", label:"Museums",           osm:"tourism=museum" },
+  { id:"theatre",    icon:"🎭", label:"Theatre & Arts",    osm:"amenity=theatre" },
+  { id:"park",       icon:"🌳", label:"Parks & Outdoors",  osm:"leisure=park" },
+  { id:"cinema",     icon:"🎬", label:"Cinema",            osm:"amenity=cinema" },
+  { id:"nightclub",  icon:"🎶", label:"Live Music & Clubs",osm:"amenity=nightclub" },
+];
+
+const VIBES = [
+  {id:"casual",  e:"😎", l:"Casual"},
+  {id:"fancy",   e:"🥂", l:"Treat Yourselves"},
+  {id:"active",  e:"🏃", l:"Active"},
+  {id:"culture", e:"🎨", l:"Cultural"},
+  {id:"date",    e:"💫", l:"Date Night"},
+];
+
+const FEATURES = [
+  {e:"⏱️", t:"True Travel-Time Fairness", d:"Optimises for equal commute time per person — not just map distance.",          u:true},
+  {e:"🗳️", t:"Built-in Group Voting",      d:"Everyone votes; the app surfaces genuine consensus, not the loudest voice.",   u:true},
+  {e:"🌡️", t:"Vibe Matching",              d:"Set the mood and get curated venue picks to match the energy.",               u:true},
+  {e:"👥", t:"Up to 4 Friends",            d:"Full group planning with per-person fairness scores for every venue.",         u:true},
+  {e:"📤", t:"Shareable Voting Links",     d:"Friends vote via a link — no app download required.",                         u:true},
+  {e:"🗺️", t:"Live Leaflet Map",           d:"Real OpenStreetMap tiles with geocoded pins and live venue markers.",          u:false},
+  {e:"🏪", t:"Real Venues via Overpass",   d:"Live business data pulled from OpenStreetMap's global Overpass API.",         u:false},
+  {e:"📡", t:"GPS Location",               d:"Use your device GPS to set starting points instantly.",                        u:false},
+];
+
+/* ══════════════════════════════════════════════════════════════
+   APP STATE
+══════════════════════════════════════════════════════════════ */
+let STATE = {
+  screen: "home",          // home | friends | categories | results
+  friends: [
+    { id:0, name:"Alex",   avatar:"🧑", color:FRIEND_COLORS[0], photo:null, location:"", coords:null },
+    { id:1, name:"Jordan", avatar:"👩", color:FRIEND_COLORS[1], photo:null, location:"", coords:null },
+  ],
+  travelMode: "driving",
+  categories: ["restaurant","bar","cafe"],
+  vibe: "casual",
+  venues: [],
+  midpt: null,
+  votes: {},
+  saved: [],
+  activeTab: "list",
+  venueFilter: "all",
+  modal: null,   // null | "avatar" | "location" | "contact" | "info" | "venue"
+  modalData: {}, // context for open modal
+  mapInstance: null,
+  mapMarkers: [],
+};
+
+function setState(patch) {
+  Object.assign(STATE, patch);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   UTILITIES
+══════════════════════════════════════════════════════════════ */
+function h(tag, attrs={}, ...children) {
+  const el = document.createElement(tag);
+  for (const [k,v] of Object.entries(attrs)) {
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2).toLowerCase(), v);
+    else el.setAttribute(k, v);
+  }
+  for (const c of children.flat()) {
+    if (c == null || c === false) continue;
+    el.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  }
+  return el;
+}
+
+function haversineKm(a, b) {
+  const R = 6371, dLat = (b.lat-a.lat)*Math.PI/180, dLng = (b.lng-a.lng)*Math.PI/180;
+  const x = Math.sin(dLat/2)**2 + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R*2*Math.atan2(Math.sqrt(x), Math.sqrt(1-x));
+}
+
+function estimateMins(from, to, mode="driving") {
+  const km = haversineKm(from, to);
+  const speeds = {driving:40, transit:25, walking:5, cycling:15};
+  return Math.max(1, Math.round((km / speeds[mode]) * 60));
+}
+
+function midpoint(coords) {
+  return { lat: coords.reduce((s,c)=>s+c.lat,0)/coords.length, lng: coords.reduce((s,c)=>s+c.lng,0)/coords.length };
+}
+
+function fairnessPct(times) {
+  const mx = Math.max(...times), mn = Math.min(...times);
+  return mx > 0 ? Math.round((1-(mx-mn)/mx)*100) : 100;
+}
+
+function avatarEl(f, size=44) {
+  const wrap = h("div", {
+    class:"avatar",
+    style:`width:${size}px;height:${size}px;background:${f.color}22;border:2.5px solid ${f.color};font-size:${f.photo?0:Math.round(size*.45)}px;`
+  });
+  if (f.photo) { const img = h("img", {src:f.photo, alt:f.name}); wrap.appendChild(img); }
+  else wrap.textContent = f.avatar;
+  return wrap;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   APIS
+══════════════════════════════════════════════════════════════ */
+let _acTimer = null;
+async function nominatimSearch(query) {
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=6&addressdetails=1`;
+  const r = await fetch(url, {headers:{"Accept-Language":"en","User-Agent":"MMITM-PWA/1.0"}});
+  const data = await r.json();
+  return data.map(d => {
+    const a = d.address||{};
+    const short = [a.neighbourhood||a.suburb||a.road, a.city||a.town||a.village||a.county, a.country].filter(Boolean).slice(0,3).join(", ");
+    return {label: short||d.display_name, lat:+d.lat, lng:+d.lon};
+  });
+}
+
+async function reverseGeocode(lat, lng) {
+  const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`;
+  const r = await fetch(url, {headers:{"Accept-Language":"en","User-Agent":"MMITM-PWA/1.0"}});
+  const d = await r.json();
+  const a = d.address||{};
+  const label = [a.neighbourhood||a.suburb||a.quarter||a.village||a.town, a.city||a.county, a.country].filter(Boolean).slice(0,2).join(", ");
+  return {label: label||d.display_name, lat, lng};
+}
+
+async function fetchOverpassVenues(lat, lng, catIds, radius=2000) {
+  const filters = catIds.map(id => {
+    const cat = CATEGORIES.find(c=>c.id===id);
+    if (!cat) return "";
+    const [k,v] = cat.osm.split("=");
+    return `node["${k}"="${v}"](around:${radius},${lat},${lng});way["${k}"="${v}"](around:${radius},${lat},${lng});`;
+  }).join("\n");
+  const query = `[out:json][timeout:20];(${filters});out center 40;`;
+  const r = await fetch("https://overpass-api.de/api/interpreter", {method:"POST", body:query});
+  const data = await r.json();
+  return data.elements.map(el => {
+    const elLat = el.lat ?? el.center?.lat;
+    const elLng = el.lon ?? el.center?.lon;
+    const tags  = el.tags||{};
+    let catId   = "restaurant";
+    for (const cat of CATEGORIES) { const [k,v]=cat.osm.split("="); if(tags[k]===v){catId=cat.id;break;} }
+    const cat   = CATEGORIES.find(c=>c.id===catId);
+    return {
+      id: el.id, name: tags.name||"Unnamed", cat: catId, icon: cat?.icon||"📍",
+      lat: elLat, lng: elLng,
+      address: [tags["addr:housenumber"],tags["addr:street"],tags["addr:city"]].filter(Boolean).join(" ")||"",
+      phone: tags.phone||tags["contact:phone"]||"",
+      website: tags.website||tags["contact:website"]||"",
+      cuisine: (tags.cuisine||"").replace(/_/g," "),
+      opening: tags.opening_hours||"",
+    };
+  }).filter(v=>v.lat&&v.lng&&v.name!=="Unnamed").slice(0,50);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   AUTOCOMPLETE WIDGET (reusable)
+══════════════════════════════════════════════════════════════ */
+function buildAutocomplete({placeholder, initialValue="", onSelect, onInput}) {
+  let results = [];
+  let chosen  = null;
+
+  const inpWrap = h("div", {class:"inp-wrap"});
+  const inp = h("input", {class:"inp", placeholder, value:initialValue, type:"text"});
+  const check = h("span", {class:"inp-check", style:"display:none"}, "✓");
+  const drop = h("div", {class:"ac-list", style:"display:none"});
+  inpWrap.append(inp, check, drop);
+
+  function showDrop() {
+    drop.innerHTML = "";
+    drop.style.display = results.length ? "block" : "none";
+    results.forEach(r => {
+      const item = h("button", {class:"ac-item"}, "📍 ", r.label);
+      item.addEventListener("click", () => {
+        chosen = r; inp.value = r.label; inp.classList.add("confirmed");
+        check.style.display = "block"; drop.style.display = "none";
+        if (onSelect) onSelect(r);
+      });
+      drop.appendChild(item);
+    });
+  }
+
+  inp.addEventListener("input", () => {
+    const val = inp.value.trim();
+    chosen = null; check.style.display = "none"; inp.classList.remove("confirmed");
+    if (onInput) onInput(val);
+    clearTimeout(_acTimer);
+    if (val.length < 3) { drop.style.display = "none"; return; }
+    _acTimer = setTimeout(async () => {
+      try { results = await nominatimSearch(val); showDrop(); }
+      catch { /* network error */ }
+    }, 400);
+  });
+
+  // Close drop on outside click
+  document.addEventListener("click", e => { if(!inpWrap.contains(e.target)) drop.style.display="none"; }, true);
+
+  return { el: inpWrap, getChosen: ()=>chosen, setValue: v=>{ inp.value=v; } };
+}
+
+/* ══════════════════════════════════════════════════════════════
+   MODALS
+══════════════════════════════════════════════════════════════ */
+function openModal(name, data={}) {
+  setState({modal:name, modalData:data});
+  renderModal();
+}
+function closeModal() {
+  setState({modal:null, modalData:{}});
+  document.getElementById("modal-root")?.remove();
+}
+
+function renderModal() {
+  document.getElementById("modal-root")?.remove();
+  if (!STATE.modal) return;
+  const root = h("div", {id:"modal-root"});
+  document.body.appendChild(root);
+
+  const overlay = h("div", {class:"overlay"});
+  overlay.addEventListener("click", e => { if(e.target===overlay) closeModal(); });
+  root.appendChild(overlay);
+
+  const sheet = h("div", {class:"sheet"});
+  overlay.appendChild(sheet);
+  sheet.appendChild(h("div", {class:"drag-handle"}));
+
+  if (STATE.modal === "info")     buildInfoModal(sheet);
+  if (STATE.modal === "avatar")   buildAvatarModal(sheet, STATE.modalData);
+  if (STATE.modal === "location") buildLocationModal(sheet, STATE.modalData);
+  if (STATE.modal === "contact")  buildContactModal(sheet, STATE.modalData);
+  if (STATE.modal === "venue")    buildVenueModal(sheet, STATE.modalData);
+}
+
+/* ── Info modal ── */
+function buildInfoModal(sheet) {
+  const hdr = h("div", {style:"display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px"});
+  hdr.append(
+    h("div", {},
+      h("div", {style:"font-family:Georgia,serif;font-size:17px;font-weight:800"}, "📍 Meet Me In ", h("span", {style:"color:var(--accent)"}, "The Middle")),
+      h("div", {style:"color:var(--sub);font-size:12px;margin-top:2px"}, "What makes this app different")
+    ),
+    closeBtn()
+  );
+  sheet.appendChild(hdr);
+
+  const legend = h("div", {style:"background:var(--accent-l);border:1px solid rgba(26,127,90,.3);border-radius:9px;padding:8px 12px;margin-bottom:14px;display:flex;gap:18px;flex-wrap:wrap"});
+  legend.innerHTML = `<div style="display:flex;align-items:center;gap:6px"><div style="width:9px;height:9px;border-radius:5px;background:var(--accent)"></div><span style="font-size:11px;font-weight:700;color:var(--accent)">Unique to this app</span></div><div style="display:flex;align-items:center;gap:6px"><div style="width:9px;height:9px;border-radius:5px;background:var(--border-m)"></div><span style="font-size:11px;font-weight:600;color:var(--sub)">Standard feature</span></div>`;
+  sheet.appendChild(legend);
+
+  FEATURES.forEach(f => {
+    const item = h("div", {class:`info-item ${f.u?"unique":"standard"}`});
+    item.append(
+      h("span", {style:"font-size:19px;flex-shrink:0;margin-top:1px"}, f.e),
+      h("div", {},
+        h("div", {style:"display:flex;align-items:center;gap:7px;margin-bottom:3px"},
+          h("span", {style:"font-weight:700;font-size:13px"}, f.t),
+          f.u ? h("span", {class:"only-badge"}, "Only here") : null
+        ),
+        h("div", {style:`font-size:12px;line-height:1.5;color:${f.u?"rgba(26,127,90,.75)":"var(--sub)"}`}, f.d)
+      )
+    );
+    sheet.appendChild(item);
+  });
+
+  sheet.appendChild(h("div", {style:"margin-top:16px;padding:10px 12px;border-radius:11px;background:var(--gold-l);border:1px solid rgba(160,114,26,.3);color:var(--gold);font-size:12px;text-align:center;font-weight:700"}, "Outperforms MeetWays · WhatsHalfway · midPoint. · Meedol"));
+}
+
+/* ── Avatar modal ── */
+function buildAvatarModal(sheet, {index}) {
+  const f = STATE.friends[index];
+  let emoji = f.avatar, color = f.color, photo = f.photo;
+  const fileRef = h("input", {type:"file", accept:"image/*", style:"display:none"});
+  sheet.appendChild(fileRef);
+
+  const hdr = h("div", {style:"display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"});
+  hdr.append(h("div", {class:"sheet-title"}, "Customise Avatar"), closeBtn());
+  sheet.appendChild(hdr);
+
+  // Preview
+  const preview = h("div", {style:"display:flex;align-items:center;gap:14px;background:var(--hi);border-radius:14px;padding:14px;border:1px solid var(--border);margin-bottom:16px"});
+  const previewAv = h("div", {class:"avatar", style:`width:58px;height:58px;background:${color}22;border:3px solid ${color};font-size:${photo?0:26}px`});
+  if (photo) { const img=h("img",{src:photo,alt:""}); previewAv.appendChild(img); }
+  else previewAv.textContent = emoji;
+  preview.append(previewAv, h("div", {}, h("div", {style:"font-weight:700;font-size:15px"}, f.name), h("div", {style:"color:var(--sub);font-size:12px"}, f.location||"No location yet")));
+  sheet.appendChild(preview);
+
+  function refreshPreview() {
+    previewAv.style.fontSize = photo ? "0" : "26px";
+    previewAv.style.background = color+"22";
+    previewAv.style.border = `3px solid ${color}`;
+    previewAv.innerHTML = "";
+    if (photo) { const img=h("img",{src:photo,alt:"",style:"width:100%;height:100%;object-fit:cover;border-radius:50%"}); previewAv.appendChild(img); }
+    else previewAv.textContent = emoji;
+  }
+
+  // Photo
+  const photoSec = h("div", {style:"margin-bottom:16px"});
+  photoSec.appendChild(h("div", {style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px"}, "Photo"));
+  const photoBtns = h("div", {style:"display:flex;gap:8px"});
+  const selfieBtn = h("button", {class:"btn-secondary", style:"flex:1;padding:9px"}, "📷 Selfie");
+  const galleryBtn= h("button", {class:"btn-secondary", style:"flex:1;padding:9px"}, "🖼️ Gallery");
+  selfieBtn.onclick  = () => { fileRef.setAttribute("capture","user"); fileRef.click(); };
+  galleryBtn.onclick = () => { fileRef.removeAttribute("capture"); fileRef.click(); };
+  photoBtns.append(selfieBtn, galleryBtn);
+  photoSec.appendChild(photoBtns);
+  sheet.appendChild(photoSec);
+
+  fileRef.addEventListener("change", e => {
+    const file = e.target.files?.[0]; if(!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => { photo = ev.target.result; refreshPreview(); };
+    reader.readAsDataURL(file);
+  });
+
+  // Colors
+  const colorSec = h("div", {style:"margin-bottom:16px"});
+  colorSec.appendChild(h("div", {style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px"}, "Colour"));
+  const colorRow = h("div", {style:"display:flex;gap:9px;flex-wrap:wrap"});
+  COLOR_OPTIONS.forEach(c => {
+    const btn = h("button", {style:`width:34px;height:34px;border-radius:17px;background:${c};border:none;outline:${color===c?`3px solid ${c}`:"3px solid transparent"};outline-offset:3px;transform:${color===c?"scale(1.15)":"none"};transition:all .14s`});
+    btn.onclick = () => { color=c; refreshPreview(); colorRow.querySelectorAll("button").forEach((b,i)=>{ const cc=COLOR_OPTIONS[i]; b.style.outline=cc===c?`3px solid ${cc}`:"3px solid transparent"; b.style.transform=cc===c?"scale(1.15)":"none"; }); };
+    colorRow.appendChild(btn);
+  });
+  colorSec.appendChild(colorRow);
+  sheet.appendChild(colorSec);
+
+  // Emoji grid
+  const emojiSec = h("div", {style:"margin-bottom:20px"});
+  emojiSec.appendChild(h("div", {style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px"}, "Emoji"));
+  const grid = h("div", {style:"display:grid;grid-template-columns:repeat(8,1fr);gap:5px"});
+  AVATAR_OPTIONS.forEach(a => {
+    const btn = h("button", {style:`background:${(!photo&&emoji===a)?color+"22":"var(--hi)"};border:1.5px solid ${(!photo&&emoji===a)?color:"var(--border)"};border-radius:9px;padding:5px 0;font-size:18px;transition:all .13s`}, a);
+    btn.onclick = () => {
+      emoji=a; photo=null; refreshPreview();
+      grid.querySelectorAll("button").forEach((b,i)=>{ const av=AVATAR_OPTIONS[i]; b.style.background=av===a?color+"22":"var(--hi)"; b.style.borderColor=av===a?color:"var(--border)"; });
+    };
+    grid.appendChild(btn);
+  });
+  emojiSec.appendChild(grid);
+  sheet.appendChild(emojiSec);
+
+  // Save
+  const saveBtn = h("button", {class:"btn-primary"}, "Save Avatar");
+  saveBtn.onclick = () => {
+    STATE.friends[index] = {...f, avatar:emoji, color, photo};
+    closeModal();
+    render();
+  };
+  sheet.appendChild(saveBtn);
+}
+
+/* ── Location modal ── */
+function buildLocationModal(sheet, {index}) {
+  const f   = STATE.friends[index];
+  let chosen = f.coords ? {label:f.location, lat:f.coords.lat, lng:f.coords.lng} : null;
+
+  const hdr = h("div", {style:"display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"});
+  const avEl = avatarEl(f, 36);
+  hdr.append(
+    h("div", {style:"display:flex;align-items:center;gap:10px"}, avEl, h("div", {class:"sheet-title"}, `Set Location for ${f.name}`)),
+    closeBtn()
+  );
+  sheet.appendChild(hdr);
+
+  // GPS button
+  let gpsState = "idle";
+  const gpsBtn = h("button", {style:"width:100%;background:var(--hi);border:1.5px solid var(--border);border-radius:11px;padding:11px;font-size:13px;font-weight:700;color:var(--sub);margin-bottom:8px;display:flex;align-items:center;justify-content:center;gap:7px;transition:all .15s"}, "📡 Use My Current Location");
+  sheet.appendChild(gpsBtn);
+
+  const gpsErr = h("div", {style:"display:none;color:var(--coral);font-size:12px;margin-bottom:8px;background:var(--coral-l);border-radius:8px;padding:8px 10px;line-height:1.4"});
+  sheet.appendChild(gpsErr);
+
+  gpsBtn.onclick = () => {
+    if (!navigator.geolocation) { gpsErr.textContent="⚠️ GPS not available in this browser."; gpsErr.style.display="block"; return; }
+    gpsBtn.innerHTML = "<span class='spin'></span> Detecting location…";
+    gpsErr.style.display = "none";
+    navigator.geolocation.getCurrentPosition(
+      async pos => {
+        try {
+          const r = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
+          chosen = r; ac.setValue(r.label);
+          gpsBtn.textContent = "✓ GPS location set";
+          gpsBtn.style.background = "var(--accent-l)";
+          gpsBtn.style.color = "var(--accent)";
+          gpsBtn.style.borderColor = "var(--accent)";
+          updateSave();
+        } catch { gpsBtn.textContent="📡 Use My Current Location"; gpsErr.textContent="⚠️ Could not reverse-geocode position."; gpsErr.style.display="block"; }
+      },
+      err => {
+        gpsBtn.textContent = "📡 Use My Current Location";
+        const msgs={1:"Location permission denied.",2:"Position unavailable.",3:"GPS timed out — search manually."};
+        gpsErr.textContent="⚠️ "+(msgs[err.code]||"GPS error."); gpsErr.style.display="block";
+      },
+      {timeout:10000, maximumAge:120000}
+    );
+  };
+
+  // Divider
+  sheet.appendChild(h("div", {style:"display:flex;align-items:center;gap:8px;margin-bottom:10px"}, h("div",{style:"flex:1;height:1px;background:var(--border)"}), h("span",{style:"color:var(--muted);font-size:11px;font-weight:600"},"or search"), h("div",{style:"flex:1;height:1px;background:var(--border)"}) ));
+
+  // Autocomplete
+  const ac = buildAutocomplete({
+    placeholder:"Type a city, neighbourhood or address…",
+    initialValue: f.location,
+    onSelect: r => { chosen = r; updateSave(); },
+    onInput: () => { chosen = null; updateSave(); },
+  });
+  sheet.appendChild(ac.el);
+
+  // Save button
+  const saveBtn = h("button", {class:"btn-primary", style:"margin-top:16px"}, "Set Location");
+  saveBtn.disabled = !chosen;
+  sheet.appendChild(saveBtn);
+
+  function updateSave() { saveBtn.disabled = !chosen; }
+
+  saveBtn.onclick = () => {
+    STATE.friends[index] = {...f, location:chosen.label, coords:{lat:chosen.lat, lng:chosen.lng}};
+    closeModal();
+    render();
+  };
+}
+
+/* ── Contact modal ── */
+function buildContactModal(sheet, {index}) {
+  let chosen = null;
+  const f = STATE.friends[index];
+
+  const hdr = h("div",{style:"display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"});
+  hdr.append(h("div",{class:"sheet-title"},"👤 Add from Contacts"), closeBtn());
+  sheet.appendChild(hdr);
+
+  sheet.appendChild(h("div",{style:"color:var(--sub);font-size:12px;line-height:1.6;margin-bottom:16px;background:var(--hi);border-radius:10px;padding:10px 12px"},"Enter your contact's name and search their location."));
+
+  // Name
+  sheet.appendChild(h("div",{style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px"},"Contact Name"));
+  const nameInp = h("input",{class:"inp", placeholder:"e.g. Sarah, Dad, Work Friend…", style:"margin-bottom:14px"});
+  nameInp.value = f.name;
+  sheet.appendChild(nameInp);
+
+  // Location
+  sheet.appendChild(h("div",{style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px"},"Their Location"));
+  const ac = buildAutocomplete({
+    placeholder:"Type city or neighbourhood…",
+    onSelect: r => { chosen=r; updateSave(); },
+    onInput: ()=>{ chosen=null; updateSave(); },
+  });
+  sheet.appendChild(ac.el);
+
+  const saveBtn = h("button",{class:"btn-primary",style:"margin-top:16px"},"Add Contact");
+  saveBtn.disabled = true;
+  sheet.appendChild(saveBtn);
+
+  function updateSave(){ saveBtn.disabled = !nameInp.value.trim() || !chosen; saveBtn.textContent = (nameInp.value.trim()&&chosen) ? `Add ${nameInp.value.trim()} →` : "Enter name & location"; }
+  nameInp.addEventListener("input", updateSave);
+
+  saveBtn.onclick = () => {
+    STATE.friends[index] = {...f, name:nameInp.value.trim(), location:chosen.label, coords:{lat:chosen.lat,lng:chosen.lng}};
+    closeModal();
+    render();
+  };
+}
+
+/* ── Venue detail modal ── */
+function buildVenueModal(sheet, {venue}) {
+  const activeFriends = STATE.friends.filter(f=>f.coords);
+  const times = activeFriends.map(f => estimateMins(f.coords,{lat:venue.lat,lng:venue.lng},STATE.travelMode));
+  const pct   = fairnessPct(times);
+
+  const hdr=h("div",{style:"display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px"});
+  hdr.append(
+    h("div",{style:"flex:1"},
+      h("div",{style:"display:flex;gap:10px;align-items:center;margin-bottom:4px"},
+        h("span",{style:"font-size:26px"},venue.icon),
+        h("div",{},
+          h("div",{style:"font-size:17px;font-weight:800;line-height:1.2"},venue.name),
+          h("div",{style:"color:var(--sub);font-size:12px"},venue.cat+(venue.cuisine?` · ${venue.cuisine}`:""))
+        )
+      ),
+      venue.address ? h("div",{style:"color:var(--sub);font-size:13px;margin-top:4px"},"📍 "+venue.address) : null,
+      venue.phone   ? h("div",{style:"color:var(--sub);font-size:13px;margin-top:4px"}, "📞 ", h("a",{href:`tel:${venue.phone}`,style:"color:var(--accent)"},venue.phone)) : null,
+      venue.opening ? h("div",{style:"color:var(--sub);font-size:13px;margin-top:4px"},"🕐 "+venue.opening) : null,
+      venue.website ? h("div",{style:"margin-top:6px"},h("a",{href:venue.website,target:"_blank",rel:"noreferrer",style:"color:var(--accent);font-size:13px;font-weight:600"},"🌐 Visit website")) : null,
+    ),
+    closeBtn()
+  );
+  sheet.appendChild(hdr);
+
+  // Fairness block
+  const fb=h("div",{style:"background:var(--hi);border-radius:13px;padding:13px;border:1px solid var(--border);margin-top:10px"});
+  const fbHdr=h("div",{style:"display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"});
+  fbHdr.append(h("div",{style:"font-weight:700;font-size:13px"},"Travel Fairness"), h("div",{style:`color:${pct>80?"var(--accent)":pct>60?"var(--gold)":"var(--coral)"};font-weight:800;font-size:15px`},pct+"%"));
+  fb.appendChild(fbHdr);
+  fb.appendChild(buildFairnessBar(times, activeFriends.map((_,i)=>FRIEND_COLORS[i])));
+  const tRow=h("div",{style:"display:flex;flex-wrap:wrap;gap:8px;margin-top:8px"});
+  activeFriends.forEach((f,i)=>{
+    const chip=h("div",{style:`display:flex;align-items:center;gap:5px;background:var(--surface);border-radius:99px;padding:4px 10px;border:1px solid ${FRIEND_COLORS[i]}44`});
+    chip.append(avatarEl(f,16), h("span",{style:`color:${FRIEND_COLORS[i]};font-weight:700;font-size:11px`},f.name), h("span",{style:"color:var(--sub);font-size:11px"},`~${times[i]}min`));
+    tRow.appendChild(chip);
+  });
+  fb.appendChild(tRow);
+  sheet.appendChild(fb);
+
+  // Actions
+  const actions=h("div",{style:"display:flex;gap:8px;margin-top:14px"});
+  const mapsLink=h("a",{href:`https://www.openstreetmap.org/?mlat=${venue.lat}&mlon=${venue.lng}&zoom=17`,target:"_blank",rel:"noreferrer",style:"flex:1;background:var(--accent-l);border:1px solid rgba(26,127,90,.3);color:var(--accent);border-radius:12px;padding:11px;font-size:13px;font-weight:700;text-decoration:none;text-align:center"},"🗺️ Open in Maps");
+  const dirLink=h("a",{href:`https://www.google.com/maps/dir/?api=1&destination=${venue.lat},${venue.lng}`,target:"_blank",rel:"noreferrer",style:"flex:1;background:var(--gold-l);border:1px solid rgba(160,114,26,.3);color:var(--gold);border-radius:12px;padding:11px;font-size:13px;font-weight:700;text-decoration:none;text-align:center"},"🧭 Directions");
+  actions.append(mapsLink, dirLink);
+  sheet.appendChild(actions);
+}
+
+function closeBtn() {
+  const b = h("button",{style:"width:28px;height:28px;border-radius:14px;background:var(--hi);border:1px solid var(--border);color:var(--sub);font-size:13px;display:flex;align-items:center;justify-content:center;flex-shrink:0"},"✕");
+  b.onclick = closeModal;
+  return b;
+}
+
+function buildFairnessBar(times, colors) {
+  const total = times.reduce((a,b)=>a+b,0)||1;
+  const bar = h("div",{class:"f-bar"});
+  times.forEach((t,i)=>{ const seg=h("div",{style:`flex:${t/total};background:${colors[i]};opacity:.72`}); bar.appendChild(seg); });
+  return bar;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   LEAFLET MAP
+══════════════════════════════════════════════════════════════ */
+let _mapInstance = null;
+let _mapMarkers  = [];
+
+function buildLeafletMap(containerId) {
+  if (_mapInstance) { _mapInstance.remove(); _mapInstance=null; }
+  const L = window.L;
+  if (!L || !STATE.midpt) return;
+
+  _mapInstance = L.map(containerId, {zoomControl:true}).setView([STATE.midpt.lat, STATE.midpt.lng], 14);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap contributors",maxZoom:19}).addTo(_mapInstance);
+
+  const activeFriends = STATE.friends.filter(f=>f.coords);
+  const colors = activeFriends.map((_,i)=>FRIEND_COLORS[i]);
+
+  // Midpoint
+  const midIcon = L.divIcon({html:`<div style="width:20px;height:20px;border-radius:50%;background:#1A7F5A;border:3px solid white;box-shadow:0 0 14px rgba(26,127,90,.7)"></div>`,iconSize:[20,20],iconAnchor:[10,10],className:""});
+  L.marker([STATE.midpt.lat,STATE.midpt.lng],{icon:midIcon}).addTo(_mapInstance).bindPopup("<b>📍 Midpoint</b>").openPopup();
+
+  activeFriends.forEach((f,i)=>{
+    const col=colors[i];
+    const icon=L.divIcon({html:`<div style="width:36px;height:36px;border-radius:50%;background:${col}22;border:2.5px solid ${col};display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 2px 8px ${col}66;overflow:hidden">${f.photo?`<img src="${f.photo}" style="width:100%;height:100%;object-fit:cover;border-radius:50%">`:`<span>${f.avatar}</span>`}</div>`,iconSize:[36,36],iconAnchor:[18,18],className:""});
+    L.marker([f.coords.lat,f.coords.lng],{icon}).addTo(_mapInstance).bindPopup(`<b>${f.name}</b><br>${f.location}`);
+    L.polyline([[f.coords.lat,f.coords.lng],[STATE.midpt.lat,STATE.midpt.lng]],{color:col,weight:2,opacity:.4,dashArray:"6,6"}).addTo(_mapInstance);
+  });
+
+  STATE.venues.slice(0,30).forEach(v=>{
+    const icon=L.divIcon({html:`<div style="background:white;border:2px solid #E0DDD5;border-radius:8px;padding:3px 5px;font-size:15px;box-shadow:0 2px 6px rgba(0,0,0,.15);cursor:pointer">${v.icon}</div>`,iconSize:[32,32],iconAnchor:[16,16],className:""});
+    const marker=L.marker([v.lat,v.lng],{icon}).addTo(_mapInstance);
+    marker.bindTooltip(v.name,{direction:"top",offset:[0,-10]});
+    marker.on("click",()=>openModal("venue",{venue:v}));
+  });
+
+  const allCoords=[[STATE.midpt.lat,STATE.midpt.lng],...activeFriends.map(f=>[f.coords.lat,f.coords.lng])];
+  if(allCoords.length>1) _mapInstance.fitBounds(allCoords,{padding:[40,40]});
+}
+
+/* ══════════════════════════════════════════════════════════════
+   SCREENS
+══════════════════════════════════════════════════════════════ */
+
+function renderHome() {
+  const wrap = h("div",{class:"home-wrap"});
+
+  // Info button
+  const infoBtn=h("button",{class:"nav-icon-btn",style:"position:absolute;top:14px;right:16px"},  "ⓘ");
+  infoBtn.onclick=()=>openModal("info");
+  wrap.appendChild(infoBtn);
+
+  // Logo
+  const hi=h("div",{class:"home-icon"}); hi.appendChild(h("img",{src:"icons/icon-192.png",alt:"MMITM"})); wrap.appendChild(hi);
+  const title=h("div",{class:"home-title"});
+  title.innerHTML="Meet Me In<br><span style='color:var(--accent)'>The Middle</span>";
+  wrap.appendChild(title);
+  wrap.appendChild(h("div",{class:"home-sub"},"Find the perfect spot for everyone — real map, real venues, fair travel, group consensus."));
+
+  // Feature chips
+  const chips=h("div",{class:"feature-chips"});
+  ["Real Map","Live Venues","2–4 Friends","Fair Travel","Group Vote"].forEach(t=>chips.appendChild(h("span",{class:"feature-chip"},"✓ "+t)));
+  wrap.appendChild(chips);
+
+  const startBtn=h("button",{class:"btn-primary",style:"max-width:288px"},"Start Planning →");
+  startBtn.onclick=()=>{setState({screen:"friends"}); render();};
+  wrap.appendChild(startBtn);
+
+  return wrap;
+}
+
+function renderFriends() {
+  const wrap = h("div",{class:"screen-pad"});
+  wrap.appendChild(h("div",{class:"step-label"},"Step 1 of 3"));
+  wrap.appendChild(h("div",{class:"screen-title"},"Who's meeting up?"));
+  wrap.appendChild(h("div",{class:"screen-sub"},"Add 2–4 people. Tap 📍 to set each person's starting location."));
+
+  STATE.friends.forEach((f,i)=>{
+    const card=h("div",{class:`card${f.coords?" confirmed":""}`,style:"margin-bottom:11px"});
+    const row=h("div",{style:"display:flex;align-items:center;gap:10px"});
+
+    // Avatar
+    const av=avatarEl(f,50);
+    const badge=h("span",{class:"edit-badge"},"✏️");
+    av.appendChild(badge);
+    av.style.cursor="pointer";
+    av.addEventListener("click",()=>openModal("avatar",{index:i}));
+    row.appendChild(av);
+
+    // Name + location
+    const info=h("div",{style:"flex:1"});
+    info.appendChild(h("div",{style:"font-weight:700;font-size:14px"},f.name));
+    info.appendChild(h("div",{style:`font-size:12px;margin-top:2px;color:${f.coords?"var(--accent)":"var(--muted)"}`},f.coords?`✓ ${f.location}`:"No location set"));
+    row.appendChild(info);
+
+    // Buttons
+    const btns=h("div",{style:"display:flex;flex-direction:column;gap:5px"});
+    const locBtn=h("button",{class:f.coords?"btn-accent-outline":"btn-primary",style:"padding:6px 12px;font-size:11px;font-weight:700;border-radius:8px"},f.coords?"📍 Change":"📍 Set Location");
+    locBtn.onclick=()=>openModal("location",{index:i});
+    const cntBtn=h("button",{class:"btn-secondary"},"👤 From Contact");
+    cntBtn.onclick=()=>openModal("contact",{index:i});
+    btns.append(locBtn,cntBtn);
+    row.appendChild(btns);
+    card.appendChild(row);
+
+    if (STATE.friends.length>2) {
+      const remBtn=h("button",{class:"btn-coral-outline",style:"margin-top:8px"},"Remove");
+      remBtn.onclick=()=>{ STATE.friends.splice(i,1); render(); };
+      card.appendChild(remBtn);
+    }
+    wrap.appendChild(card);
+  });
+
+  if (STATE.friends.length<4) {
+    const addBtn=h("button",{style:"width:100%;background:transparent;border:1.5px dashed var(--border-m);border-radius:14px;color:var(--muted);padding:12px 0;font-size:13px;font-weight:600;margin-bottom:18px;transition:all .18s"},"+ Add another person ("+STATE.friends.length+"/4)");
+    addBtn.onmouseenter=()=>{addBtn.style.borderColor="var(--accent)";addBtn.style.color="var(--accent)";addBtn.style.background="var(--accent-l)"};
+    addBtn.onmouseleave=()=>{addBtn.style.borderColor="var(--border-m)";addBtn.style.color="var(--muted)";addBtn.style.background="transparent"};
+    addBtn.onclick=()=>{
+      const defs=[{name:"Sam",avatar:"🧔"},{name:"Riley",avatar:"👱"}];
+      const d=defs[STATE.friends.length-2]||{name:"Friend",avatar:"🧑"};
+      STATE.friends.push({...d,id:Date.now(),color:FRIEND_COLORS[STATE.friends.length],photo:null,location:"",coords:null});
+      render();
+    };
+    wrap.appendChild(addBtn);
+  }
+
+  // Travel mode
+  wrap.appendChild(h("div",{style:"font-weight:700;font-size:14px;margin-bottom:9px"},"Travel mode"));
+  const pills=h("div",{class:"pills",style:"margin-bottom:20px"});
+  [["🚗","driving","Driving"],["🚇","transit","Transit"],["🚶","walking","Walking"],["🚲","cycling","Cycling"]].forEach(([ic,id,lb])=>{
+    const p=h("button",{class:`pill${STATE.travelMode===id?" active":""}`},ic+" "+lb);
+    p.onclick=()=>{ STATE.travelMode=id; render(); };
+    pills.appendChild(p);
+  });
+  wrap.appendChild(pills);
+
+  // Progress
+  const readyCount=STATE.friends.filter(f=>f.coords).length;
+  const bars=h("div",{class:"progress-bars"});
+  STATE.friends.forEach(f=>{
+    const b=h("div",{class:"progress-bar",style:`background:${f.coords?f.color:"var(--border)"}`});
+    bars.appendChild(b);
+  });
+  wrap.appendChild(bars);
+  wrap.appendChild(h("div",{style:"color:var(--sub);font-size:12px;text-align:center;margin-bottom:12px"},readyCount<2?`Set ${2-readyCount} more location${readyCount===1?"":"s"} to continue`:`${readyCount}/${STATE.friends.length} locations confirmed ✓`));
+
+  const nextBtn=h("button",{class:"btn-primary"},readyCount>=2?"Choose Categories →":"Set at least 2 locations first");
+  nextBtn.disabled=readyCount<2;
+  nextBtn.onclick=()=>{setState({screen:"categories"});render();};
+  wrap.appendChild(nextBtn);
+  return wrap;
+}
+
+function renderCategories() {
+  const wrap=h("div",{class:"screen-pad"});
+  wrap.appendChild(h("div",{class:"step-label"},"Step 2 of 3"));
+  wrap.appendChild(h("div",{class:"screen-title"},"What's the vibe?"));
+  wrap.appendChild(h("div",{class:"screen-sub"},"Choose the mood and the types of places to look for. We'll search real venues near your midpoint."));
+
+  // Vibes
+  wrap.appendChild(h("div",{style:"font-weight:700;font-size:13px;margin-bottom:9px"},"Mood"));
+  const vibes=h("div",{class:"vibes",style:"margin-bottom:22px"});
+  VIBES.forEach(v=>{
+    const btn=h("button",{class:`vibe-btn${STATE.vibe===v.id?" on":""}`},h("span",{style:"font-size:21px"},v.e),h("span",{class:"vibe-label"},v.l));
+    btn.onclick=()=>{STATE.vibe=v.id;render();};
+    vibes.appendChild(btn);
+  });
+  wrap.appendChild(vibes);
+
+  // Categories
+  wrap.appendChild(h("div",{style:"font-weight:700;font-size:13px;margin-bottom:9px"},"Categories ",h("span",{style:"color:var(--sub);font-weight:400;font-size:12px"},"("+STATE.categories.length+")")));
+  const grid=h("div",{class:"cat-grid",style:"margin-bottom:26px"});
+  CATEGORIES.forEach(cat=>{
+    const on=STATE.categories.includes(cat.id);
+    const item=h("button",{class:`cat-item${on?" on":""}`},h("span",{class:"icon"},cat.icon),h("span",{class:"label"},cat.label));
+    if(on) item.appendChild(h("span",{class:"cat-check"},"✓"));
+    item.onclick=()=>{
+      if(on) STATE.categories=STATE.categories.filter(x=>x!==cat.id);
+      else STATE.categories.push(cat.id);
+      render();
+    };
+    grid.appendChild(item);
+  });
+  wrap.appendChild(grid);
+
+  const nextBtn=h("button",{class:"btn-primary"},"Find Real Venues Near Midpoint →");
+  nextBtn.disabled=STATE.categories.length===0;
+  nextBtn.onclick=()=>loadResults();
+  wrap.appendChild(nextBtn);
+  return wrap;
+}
+
+async function loadResults() {
+  setState({screen:"results", venues:[], midpt:null, activeTab:"list"});
+  render();
+
+  const activeFriends=STATE.friends.filter(f=>f.coords);
+  const mp=midpoint(activeFriends.map(f=>f.coords));
+  STATE.midpt=mp;
+
+  try {
+    const vs=await fetchOverpassVenues(mp.lat,mp.lng,STATE.categories,2000);
+    STATE.venues=vs;
+  } catch(e) {
+    STATE.venues=[];
+    console.error("Overpass error",e);
+  }
+  render();
+}
+
+function renderResults() {
+  const wrap=h("div",{});
+  const activeFriends=STATE.friends.filter(f=>f.coords);
+  const colors=activeFriends.map((_,i)=>FRIEND_COLORS[i]);
+
+  // Loading state
+  if (!STATE.midpt) {
+    const loading=h("div",{style:"display:flex;flex-direction:column;align-items:center;justify-content:center;height:420px;gap:16px"});
+    loading.appendChild(h("div",{class:"spin",style:"width:48px;height:48px;border-width:3px"}));
+    loading.appendChild(h("div",{style:"font-weight:700;font-size:15px"},"Finding your midpoint…"));
+    loading.appendChild(h("div",{style:"color:var(--sub);font-size:12px;text-align:center;max-width:220px"},"Geocoding locations & fetching live venues from OpenStreetMap"));
+    wrap.appendChild(loading);
+    return wrap;
+  }
+
+  // Banner
+  const cA=activeFriends[0]?.location?.split(",")[0]||"";
+  const cB=activeFriends[1]?.location?.split(",")[0]||"";
+  const banner=h("div",{class:"banner"});
+  const bannerTop=h("div",{style:"display:flex;justify-content:space-between;align-items:flex-start"});
+  bannerTop.append(
+    h("div",{},
+      h("div",{class:"banner-label"},"Midpoint Found"),
+      h("div",{class:"banner-title"},cA&&cB?`Between ${cA} & ${cB}`:"Your Group Midpoint"),
+      h("div",{style:"color:var(--sub);font-size:12px"},STATE.venues.length+" real venues found nearby")
+    ),
+    h("div",{style:"text-align:right"},h("div",{style:"color:var(--muted);font-size:10px"},"FRIENDS"),h("div",{style:"font-size:22px;font-weight:900"},activeFriends.length))
+  );
+  banner.appendChild(bannerTop);
+  const friendChips=h("div",{style:"display:flex;gap:7px;margin-top:10px;flex-wrap:wrap"});
+  activeFriends.forEach((f,i)=>{
+    const chip=h("div",{style:`background:var(--surface);border-radius:99px;padding:4px 10px;display:flex;align-items:center;gap:5px;border:1px solid ${colors[i]}44;box-shadow:0 1px 3px var(--sh)`});
+    chip.append(avatarEl(f,17),h("span",{style:`color:${colors[i]};font-weight:700;font-size:12px`},f.name));
+    friendChips.appendChild(chip);
+  });
+  banner.appendChild(friendChips);
+  wrap.appendChild(banner);
+
+  // Tabs
+  const tabs=h("div",{class:"tabs"});
+  [["list","📋 List"],["map","🗺️ Map"],["vote","🗳️ Vote"]].forEach(([id,lb])=>{
+    const tab=h("button",{class:`tab${STATE.activeTab===id?" active":""}`},lb);
+    tab.onclick=()=>{STATE.activeTab=id;render();};
+    tabs.appendChild(tab);
+  });
+  wrap.appendChild(tabs);
+
+  // Tab content
+  const content=h("div",{style:"padding:14px 14px 100px"});
+
+  if (STATE.activeTab==="list") {
+    // Filter chips
+    const filterRow=h("div",{style:"display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:14px"});
+    const allPill=h("button",{class:`pill${STATE.venueFilter==="all"?" active":""}`},"All ("+STATE.venues.length+")");
+    allPill.onclick=()=>{STATE.venueFilter="all";render();};
+    filterRow.appendChild(allPill);
+    STATE.categories.forEach(id=>{
+      const cat=CATEGORIES.find(c=>c.id===id);
+      const cnt=STATE.venues.filter(v=>v.cat===id).length;
+      if(!cat||!cnt) return;
+      const p=h("button",{class:`pill${STATE.venueFilter===id?" active":""}`},cat.icon+" "+cat.label+" ("+cnt+")");
+      p.onclick=()=>{STATE.venueFilter=id;render();};
+      filterRow.appendChild(p);
+    });
+    content.appendChild(filterRow);
+
+    const shown=STATE.venueFilter==="all"?STATE.venues:STATE.venues.filter(v=>v.cat===STATE.venueFilter);
+    if(shown.length===0) content.appendChild(h("div",{style:"color:var(--sub);text-align:center;padding:40px 0;font-size:13px"},STATE.venues.length===0?"No venues found near your midpoint. Try different categories or a wider area.":"No venues for this category."));
+
+    shown.slice(0,30).forEach(v=>{
+      const times=activeFriends.map(f=>estimateMins(f.coords,{lat:v.lat,lng:v.lng},STATE.travelMode));
+      const pct=fairnessPct(times);
+      const isSaved=STATE.saved.includes(v.id);
+      const isOpen=STATE.venueFilter===v.id+"open"; // toggled below
+
+      const card=h("div",{class:"venue-card"});
+      const top=h("div",{style:"display:flex;justify-content:space-between;margin-bottom:8px"});
+      const left=h("div",{style:"display:flex;gap:10px;flex:1"});
+      left.append(
+        h("div",{class:"venue-icon-box"},v.icon),
+        h("div",{style:"flex:1"},
+          h("div",{style:"font-weight:700;font-size:14px"},v.name),
+          h("div",{style:"color:var(--sub);font-size:11px;margin-top:1px"},
+            (v.cuisine?v.cuisine+" · ":"")+(v.address||CATEGORIES.find(c=>c.id===v.cat)?.label||"")
+          )
+        )
+      );
+      const star=h("button",{style:`background:transparent;border:none;font-size:18px;color:${isSaved?"var(--gold)":"var(--border-m)"}`,type:"button"},isSaved?"★":"☆");
+      star.onclick=(e)=>{e.stopPropagation();if(isSaved)STATE.saved=STATE.saved.filter(x=>x!==v.id);else STATE.saved.push(v.id);render();};
+      top.append(left,star);
+      card.appendChild(top);
+
+      // Fairness
+      const fairSec=h("div",{});
+      const fairHdr=h("div",{style:"display:flex;justify-content:space-between;margin-bottom:4px"});
+      fairHdr.append(h("div",{style:"color:var(--sub);font-size:10px;font-weight:700;letter-spacing:.05em"},"TRAVEL FAIRNESS"),h("span",{class:`fairness-pct ${pct>80?"hi":pct>60?"md":"lo"}`},pct+"%"));
+      fairSec.appendChild(fairHdr);
+      fairSec.appendChild(buildFairnessBar(times,colors));
+      const tLabels=h("div",{style:"display:flex;gap:9px;margin-top:4px;flex-wrap:wrap"});
+      activeFriends.forEach((f,i)=>tLabels.appendChild(h("span",{style:`font-size:10px;color:${colors[i]};font-weight:600`},f.name+": ~"+times[i]+"min")));
+      fairSec.appendChild(tLabels);
+      card.appendChild(fairSec);
+
+      card.onclick=()=>openModal("venue",{venue:v});
+      content.appendChild(card);
+    });
+  }
+
+  else if (STATE.activeTab==="map") {
+    const mapDiv=h("div",{id:"map"});
+    content.appendChild(mapDiv);
+    content.appendChild(h("div",{style:"color:var(--sub);font-size:11px;text-align:center;margin-top:8px"},"Tap any venue pin for details · Dashed lines show travel routes"));
+    // Defer map init until DOM is attached
+    setTimeout(()=>buildLeafletMap("map"),50);
+  }
+
+  else if (STATE.activeTab==="vote") {
+    const voteBanner=h("div",{style:"background:var(--accent-l);border-radius:11px;padding:11px 13px;margin-bottom:14px;border:1px solid rgba(26,127,90,.25)"});
+    voteBanner.append(h("div",{style:"color:var(--accent);font-weight:700;font-size:13px"},"🗳️ Group Voting"),h("div",{style:"color:var(--sub);font-size:12px;margin-top:2px;line-height:1.5"},"Vote on real venues near your midpoint. Share the link so everyone can weigh in."));
+    content.appendChild(voteBanner);
+
+    STATE.venues.slice(0,12).forEach(v=>{
+      const mv=STATE.votes[v.id];
+      const card=h("div",{class:"vote-card"});
+      card.append(
+        h("div",{style:"width:38px;height:38px;border-radius:9px;background:var(--hi);display:flex;align-items:center;justify-content:center;font-size:19px;flex-shrink:0"},v.icon),
+        h("div",{style:"flex:1;min-width:0"},h("div",{style:"font-weight:700;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"},v.name),h("div",{style:"color:var(--sub);font-size:11px"},v.address||CATEGORIES.find(c=>c.id===v.cat)?.label||""))
+      );
+      const voteBtns=h("div",{style:"display:flex;gap:5px;flex-shrink:0"});
+      const upBtn=h("button",{class:`vote-btn${mv==="up"?" up":""}`},"👍");
+      const dnBtn=h("button",{class:`vote-btn${mv==="down"?" down":""}`},"👎");
+      upBtn.onclick=()=>{STATE.votes[v.id]=mv==="up"?null:"up";render();};
+      dnBtn.onclick=()=>{STATE.votes[v.id]=mv==="down"?null:"down";render();};
+      voteBtns.append(upBtn,dnBtn);
+      card.appendChild(voteBtns);
+      content.appendChild(card);
+    });
+
+    const shareBtn=h("button",{class:"btn-primary",style:"margin-top:8px"},"📤 Share Voting Link");
+    shareBtn.onclick=()=>{
+      const url=window.location.href;
+      if(navigator.share){navigator.share({title:"Meet Me In The Middle",url});}
+      else if(navigator.clipboard){navigator.clipboard.writeText(url).then(()=>alert("Link copied to clipboard!"));}
+      else alert("Share URL: "+url);
+    };
+    content.appendChild(shareBtn);
+  }
+
+  wrap.appendChild(content);
+  return wrap;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   MAIN RENDER
+══════════════════════════════════════════════════════════════ */
+function render() {
+  const scr=document.getElementById("screen");
+  scr.innerHTML="";
+
+  // Nav bar for inner screens
+  if (STATE.screen!=="home") {
+    const nav=h("div",{class:"nav-bar"});
+    const backBtn=h("button",{class:"nav-btn"},"← Back");
+    backBtn.onclick=()=>{
+      if(_mapInstance){_mapInstance.remove();_mapInstance=null;}
+      const prev={friends:"home",categories:"friends",results:"categories"};
+      setState({screen:prev[STATE.screen]||"home"});
+      render();
+    };
+    const infoBtn=h("button",{class:"nav-icon-btn"},"ⓘ");
+    infoBtn.onclick=()=>openModal("info");
+    nav.append(backBtn, h("div",{class:"nav-title"},"📍 ",h("span",{},"MMITM")), infoBtn);
+    scr.appendChild(nav);
+  }
+
+  let content;
+  if      (STATE.screen==="home")       content=renderHome();
+  else if (STATE.screen==="friends")    content=renderFriends();
+  else if (STATE.screen==="categories") content=renderCategories();
+  else if (STATE.screen==="results")    content=renderResults();
+
+  if (content) scr.appendChild(content);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   BOOT
+══════════════════════════════════════════════════════════════ */
+// Update clock
+function updateClock(){
+  const now=new Date();
+  const el=document.querySelector(".status-bar span");
+  if(el) el.textContent=now.getHours()+":"+(now.getMinutes()+"").padStart(2,"0");
+}
+setInterval(updateClock,30000);
+updateClock();
+
+// Register service worker
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("./sw.js").catch(()=>{});
+}
+
+render();
+</script>
+</body>
+</html>
