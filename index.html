@@ -1267,15 +1267,9 @@ async function loadResults() {
   render();
 
   const activeFriends = STATE.friends.filter(f=>f.coords);
-  let maxDist=0;
-  for (let a=0;a<activeFriends.length;a++) {
-    for (let b=a+1;b<activeFriends.length;b++) {
-      const d=haversineKm(activeFriends[a].coords,activeFriends[b].coords);
-      if(d>maxDist) maxDist=d;
-    }
-  }
-  const radiusM=Math.round(Math.min(Math.max(maxDist*500,1500),15000));
-  STATE._lastRadiusM=radiusM;
+  // Fixed 3km radius — user already chose the area; sweep the whole neighborhood
+  const radiusM = 3000;
+  STATE._lastRadiusM = radiusM;
 
   try {
     const vs=await fetchVenues(mp.lat,mp.lng,STATE.categories,radiusM);
