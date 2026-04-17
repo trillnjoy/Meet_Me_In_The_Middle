@@ -383,36 +383,37 @@ async function reverseGeocode(lat, lng) {
 }
 
 async function fetchVenues(lat, lng, catIds, radius=2000) {
-  // Use Nominatim directly — proven to work in Safari from GitHub Pages.
-  // Nominatim supports structured queries by amenity/leisure tag.
-  const NOMINATIM_TAGS = {
-    restaurant:  {key:"amenity",  val:"restaurant"},
-    bar:         {key:"amenity",  val:"bar"},
-    cafe:        {key:"amenity",  val:"cafe"},
-    golf:        {key:"leisure",  val:"golf_course"},
-    spa:         {key:"leisure",  val:"spa"},
-    museum:      {key:"tourism",  val:"museum"},
-    theatre:     {key:"amenity",  val:"theatre"},
-    park:        {key:"leisure",  val:"park"},
-    cinema:      {key:"amenity",  val:"cinema"},
-    nightclub:   {key:"amenity",  val:"nightclub"},
+  // Nominatim free-text search bounded to a viewbox around the midpoint.
+  // ?q= is the only reliably supported search parameter across all result types.
+  // amenity=/leisure= as standalone params return 400 — confirmed in production.
+  const SEARCH_TERMS = {
+    restaurant: "restaurant",
+    bar:        "bar",
+    cafe:       "cafe",
+    golf:       "golf course",
+    spa:        "day spa",
+    museum:     "museum",
+    theatre:    "theatre",
+    park:       "park",
+    cinema:     "cinema",
+    nightclub:  "nightclub",
   };
 
-  // Convert radius in metres to a bounding box (rough: 1 deg lat ≈ 111km)
-  const deg = (radius / 111000) * 1.4; // slightly generous
+  // Bounding box from radius (1 deg lat ≈ 111km)
+  const deg = (radius / 111000) * 1.5;
   const viewbox = [lng-deg, lat-deg, lng+deg, lat+deg].join(",");
 
   const results = [];
   const seen = new Set();
 
   for (const id of catIds) {
-    const tag = NOMINATIM_TAGS[id];
-    const cat = CATEGORIES.find(c=>c.id===id);
-    if (!tag || !cat) continue;
+    const term = SEARCH_TERMS[id];
+    const cat  = CATEGORIES.find(c=>c.id===id);
+    if (!term || !cat) continue;
 
     try {
       const url = "https://nominatim.openstreetmap.org/search"
-        + "?" + tag.key + "=" + encodeURIComponent(tag.val)
+        + "?q=" + encodeURIComponent(term)
         + "&format=json&limit=20&addressdetails=1"
         + "&bounded=1&viewbox=" + viewbox;
 
@@ -422,35 +423,27 @@ async function fetchVenues(lat, lng, catIds, radius=2000) {
 
       for (const d of data) {
         if (!d.lat || !d.lon) continue;
-        const a = d.address || {};
-        // Build a clean venue name
-        const name = a.amenity || a.leisure || a.tourism || a.shop
-          || d.display_name.split(",")[0].trim();
-        if (!name || seen.has(d.place_id)) continue;
+        if (seen.has(d.place_id)) continue;
         seen.add(d.place_id);
 
-        // Build address
-        const street   = [a.house_number, a.road].filter(Boolean).join(" ");
-        const city     = a.city || a.town || a.village || a.suburb || "";
-        const state    = a.state || "";
-        const address  = [street, city, state].filter(Boolean).join(", ");
+        const a    = d.address || {};
+        const name = a.amenity || a.leisure || a.tourism || a.shop
+                  || d.display_name.split(",")[0].trim();
+        if (!name) continue;
+
+        const street  = [a.house_number, a.road].filter(Boolean).join(" ");
+        const city    = a.city || a.town || a.village || a.suburb || "";
+        const state   = a.state || "";
+        const address = [street, city, state].filter(Boolean).join(", ");
 
         results.push({
-          id:      d.place_id,
-          name,
-          cat:     id,
-          icon:    cat.icon,
-          lat:     +d.lat,
-          lng:     +d.lon,
-          address,
-          phone:   "",
-          website: "",
-          cuisine: "",
-          opening: "",
+          id: d.place_id, name, cat: id, icon: cat.icon,
+          lat: +d.lat, lng: +d.lon,
+          address, phone:"", website:"", cuisine:"", opening:"",
         });
       }
     } catch(e) {
-      console.warn("Nominatim venue search failed for", id, e.message);
+      console.warn("Venue search failed for", id, e.message);
     }
   }
 
