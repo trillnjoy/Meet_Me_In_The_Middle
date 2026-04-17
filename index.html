@@ -462,7 +462,8 @@ async function findCandidateAreas() {
   const timeSteps = [20, 25, 30, 40, 50, 60, 75];
   let candidatePoints = [];
 
-  for (const mins of timeSteps) {
+  for (let si = 0; si < timeSteps.length; si++) {
+    const mins = timeSteps[si];
     // Fetch isochrone for each friend in parallel
     const isoResults = await Promise.all(
       activeFriends.map(f => fetchIsochrone(f.coords.lat, f.coords.lng, mins, profile))
@@ -496,13 +497,15 @@ async function findCandidateAreas() {
       { lat: (bbox[1]+bbox[3])/2,     lng: (bbox[0]*2+bbox[2])/3 },
       { lat: (bbox[1]+bbox[3])/2,     lng: (bbox[0]+bbox[2]*2)/3 },
     ];
-    for (const pt of gridCandidates) {
+    for (let gi = 0; gi < gridCandidates.length; gi++) {
+      const pt = gridCandidates[gi];
       const turfPt = turf.point([pt.lng, pt.lat]);
       if (turf.booleanPointInPolygon(turfPt, intersection)) pts.push(pt);
     }
 
     // Score each point by travel-time fairness (using haversine estimate for now)
-    for (const pt of pts) {
+    for (let pi = 0; pi < pts.length; pi++) {
+      const pt = pts[pi];
       const times = activeFriends.map(f => estimateMins(f.coords, pt, STATE.travelMode));
       const mx = Math.max(...times), mn = Math.min(...times);
       const fairness = mx > 0 ? Math.round((1 - (mx - mn) / mx) * 100) : 100;
@@ -520,7 +523,8 @@ async function findCandidateAreas() {
   // Sort by fairness desc, deduplicate by proximity (~2km), take top 5
   candidatePoints.sort((a, b) => b.fairness - a.fairness);
   const deduped = [];
-  for (const pt of candidatePoints) {
+  for (let di = 0; di < candidatePoints.length; di++) {
+    const pt = candidatePoints[di];
     const tooClose = deduped.some(d => haversineKm(d, pt) < 2);
     if (!tooClose) deduped.push(pt);
     if (deduped.length >= 5) break;
@@ -555,7 +559,8 @@ async function findCandidateAreas() {
   const results = [];
   const seen = new Set();
 
-  for (const id of catIds) {
+  for (let ci = 0; ci < catIds.length; ci++) {
+    const id   = catIds[ci];
     const term = SEARCH_TERMS[id];
     const cat  = CATEGORIES.find(c=>c.id===id);
     if (!term || !cat) continue;
@@ -570,7 +575,8 @@ async function findCandidateAreas() {
       if (!r.ok) throw new Error("HTTP " + r.status);
       const data = await r.json();
 
-      for (const d of data) {
+      for (let di = 0; di < data.length; di++) {
+        const d = data[di];
         if (!d.lat || !d.lon) continue;
         if (seen.has(d.place_id)) continue;
         seen.add(d.place_id);
