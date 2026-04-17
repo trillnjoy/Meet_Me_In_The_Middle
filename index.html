@@ -621,7 +621,7 @@ function buildAutocomplete({placeholder, initialValue="", onSelect, onInput}) {
   let chosen  = null;
 
   const inpWrap = h("div", {class:"inp-wrap"});
-  const inp = h("input", {class:"inp", placeholder, value:initialValue, type:"text"});
+  const inp = h("input", {class:"inp", placeholder, value:initialValue, type:"text", autocomplete:"street-address", autocorrect:"off", autocapitalize:"words", spellcheck:"false"});
   const check = h("span", {class:"inp-check", style:"display:none"}, "✓");
   const drop = h("div", {class:"ac-list", style:"display:none"});
   inpWrap.append(inp, check, drop);
@@ -1106,13 +1106,21 @@ function renderFriends() {
     const card=h("div",{class:`card${f.coords?" confirmed":""}`,style:"margin-bottom:11px"});
     const row=h("div",{style:"display:flex;align-items:center;gap:10px"});
 
-    // Avatar
+    // Avatar — with edit badge (bottom-right) and remove badge (top-left) when removable
+    const avWrap=h("div",{style:"position:relative;flex-shrink:0"});
     const av=avatarEl(f,50);
-    const badge=h("span",{class:"edit-badge"},"✏️");
-    av.appendChild(badge);
+    const editBadge=h("span",{class:"edit-badge"},"✏️");
+    av.appendChild(editBadge);
     av.style.cursor="pointer";
     av.addEventListener("click",()=>openModal("avatar",{index:i}));
-    row.appendChild(av);
+    avWrap.appendChild(av);
+
+    if (i > 0) {
+      const remBadge=h("button",{style:"position:absolute;top:-4px;left:-4px;width:20px;height:20px;border-radius:50%;background:var(--coral);border:2px solid var(--surface);color:white;font-size:11px;font-weight:900;display:flex;align-items:center;justify-content:center;line-height:1;z-index:10;padding:0"},"×");
+      remBadge.onclick=(e)=>{ e.stopPropagation(); STATE.friends.splice(i,1); render(); };
+      avWrap.appendChild(remBadge);
+    }
+    row.appendChild(avWrap);
 
     // Name + location
     const info=h("div",{style:"flex:1"});
@@ -1130,11 +1138,6 @@ function renderFriends() {
     row.appendChild(btns);
     card.appendChild(row);
 
-    if (STATE.friends.length>2) {
-      const remBtn=h("button",{class:"btn-coral-outline",style:"margin-top:8px"},"Remove");
-      remBtn.onclick=()=>{ STATE.friends.splice(i,1); render(); };
-      card.appendChild(remBtn);
-    }
     wrap.appendChild(card);
   });
 
@@ -1541,7 +1544,24 @@ function render() {
     backBtn.onclick=()=>{
       if(_mapInstance){_mapInstance.remove();_mapInstance=null;}
       const prev={friends:"home",categories:"friends",areas:"categories",results:"areas"};
-      setState({screen:prev[STATE.screen]||"home"});
+      const nextScreen = prev[STATE.screen]||"home";
+      if (nextScreen === "home") {
+        // Reset session state so next planning starts fresh
+        STATE.friends = [{ id:0, name:"Me", avatar:"🧑", color:FRIEND_COLORS[0], photo:null, location:"", coords:null }];
+        STATE.categories = ["restaurant","bar","cafe"];
+        STATE.vibe = "casual";
+        STATE.venues = [];
+        STATE.midpt = null;
+        STATE.candidateAreas = [];
+        STATE.selectedAreas = [];
+        STATE.votes = {};
+        STATE.saved = [];
+        STATE.venueError = "";
+        STATE.areaError = "";
+        STATE.activeTab = "list";
+        STATE.venueFilter = "all";
+      }
+      setState({screen:nextScreen});
       render();
     };
     const infoBtn=h("button",{class:"nav-icon-btn"},"ⓘ");
