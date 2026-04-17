@@ -631,7 +631,7 @@ function buildAutocomplete({placeholder, initialValue="", onSelect, onInput}) {
   const uid = "ac_" + Math.random().toString(36).slice(2);
 
   const inpWrap = h("div", {class:"inp-wrap"});
-  const inp = h("input", {class:"inp", placeholder, value:initialValue, type:"text", autocomplete:"off", autocorrect:"off", autocapitalize:"words", spellcheck:"false", name:uid});
+  const inp = h("input", {class:"inp", placeholder, value:initialValue, type:"text", autocomplete:"street-address", autocorrect:"off", autocapitalize:"words", spellcheck:"false", name:uid});
   const check = h("span", {class:"inp-check", style:"display:none"}, "✓");
   const drop = h("div", {class:"ac-list", style:"display:none"});
   inpWrap.append(inp, check, drop);
