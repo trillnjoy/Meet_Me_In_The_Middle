@@ -241,7 +241,7 @@ const FEATURES = [
   {e:"👥", t:"Up to 4 Friends",            d:"Full group planning with per-person fairness scores for every venue.",         u:true},
   {e:"📤", t:"Shareable Voting Links",     d:"Friends vote via a link — no app download required.",                         u:true},
   {e:"🗺️", t:"Live Leaflet Map",           d:"Real OpenStreetMap tiles with geocoded pins and live venue markers.",          u:false},
-  {e:"🏪", t:"Real Venues via Overpass",   d:"Live business data pulled from OpenStreetMap's global Overpass API.",         u:false},
+  {e:"🏪", t:"Real Venue Search",           d:"Live venue data from OpenStreetMap/Nominatim — restaurants, bars, spas and more.",u:false},
   {e:"📡", t:"GPS Location",               d:"Use your device GPS to set starting points instantly.",                        u:false},
 ];
 
@@ -327,106 +327,134 @@ function avatarEl(f, size=44) {
 ══════════════════════════════════════════════════════════════ */
 let _acTimer = null;
 async function nominatimSearch(query) {
-  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=6&addressdetails=1`;
-  const r = await fetch(url, {headers:{"Accept-Language":"en","User-Agent":"MMITM-PWA/1.0"}});
+  // Include addresses and POIs; exclude pure admin boundaries (country/state level)
+  const url = "https://nominatim.openstreetmap.org/search"
+    + "?q=" + encodeURIComponent(query)
+    + "&format=json&limit=8&addressdetails=1&extratags=0";
+  const r = await fetch(url);
   const data = await r.json();
-  return data.map(d => {
-    const a = d.address||{};
-    const short = [a.neighbourhood||a.suburb||a.road, a.city||a.town||a.village||a.county, a.country].filter(Boolean).slice(0,3).join(", ");
-    return {label: short||d.display_name, lat:+d.lat, lng:+d.lon};
-  });
+  return data
+    .filter(d => {
+      // Drop results that are just high-level admin areas with no street precision
+      const skip = ["country","state","state_district"];
+      return !skip.includes(d.type) && !skip.includes(d.addresstype);
+    })
+    .map(d => {
+      const a = d.address || {};
+      // Build a label that shows enough detail to distinguish results
+      const street   = [a.house_number, a.road].filter(Boolean).join(" ");
+      const locality = a.neighbourhood || a.suburb || a.quarter || a.village || a.town || "";
+      const city     = a.city || a.municipality || a.county || "";
+      const state    = a.state || "";
+      const country  = a.country_code ? a.country_code.toUpperCase() : "";
+      // For US addresses show: "123 Main St, Neighborhood, City, CA"
+      // For international: "Street, City, Country"
+      let label;
+      if (street) {
+        label = [street, locality||city, state||country].filter(Boolean).join(", ");
+      } else if (locality) {
+        label = [locality, city, state, country].filter(Boolean).join(", ");
+      } else {
+        label = [city, state, country].filter(Boolean).join(", ") || d.display_name.split(",").slice(0,3).join(",").trim();
+      }
+      return { label, fullAddress: d.display_name, lat: +d.lat, lng: +d.lon, type: d.type };
+    })
+    .filter((d,i,arr) => arr.findIndex(x=>x.label===d.label)===i); // deduplicate
 }
 
 async function reverseGeocode(lat, lng) {
-  const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`;
-  const r = await fetch(url, {headers:{"Accept-Language":"en","User-Agent":"MMITM-PWA/1.0"}});
+  const url = "https://nominatim.openstreetmap.org/reverse?lat=" + lat + "&lon=" + lng + "&format=json&zoom=16";
+  const r = await fetch(url);
   const d = await r.json();
-  const a = d.address||{};
-  const label = [a.neighbourhood||a.suburb||a.quarter||a.village||a.town, a.city||a.county, a.country].filter(Boolean).slice(0,2).join(", ");
-  return {label: label||d.display_name, lat, lng};
+  const a = d.address || {};
+  const street   = [a.house_number, a.road].filter(Boolean).join(" ");
+  const locality = a.neighbourhood || a.suburb || a.quarter || a.village || a.town || "";
+  const city     = a.city || a.municipality || a.county || "";
+  const state    = a.state || "";
+  let label;
+  if (street) {
+    label = [street, locality||city, state].filter(Boolean).join(", ");
+  } else if (locality) {
+    label = [locality, city, state].filter(Boolean).join(", ");
+  } else {
+    label = [city, state].filter(Boolean).join(", ") || d.display_name.split(",").slice(0,3).join(",").trim();
+  }
+  return { label, lat, lng };
 }
 
-async function fetchOverpassVenues(lat, lng, catIds, radius=2000) {
-  const filters = catIds.map(id => {
+async function fetchVenues(lat, lng, catIds, radius=2000) {
+  // Use Nominatim directly — proven to work in Safari from GitHub Pages.
+  // Nominatim supports structured queries by amenity/leisure tag.
+  const NOMINATIM_TAGS = {
+    restaurant:  {key:"amenity",  val:"restaurant"},
+    bar:         {key:"amenity",  val:"bar"},
+    cafe:        {key:"amenity",  val:"cafe"},
+    golf:        {key:"leisure",  val:"golf_course"},
+    spa:         {key:"leisure",  val:"spa"},
+    museum:      {key:"tourism",  val:"museum"},
+    theatre:     {key:"amenity",  val:"theatre"},
+    park:        {key:"leisure",  val:"park"},
+    cinema:      {key:"amenity",  val:"cinema"},
+    nightclub:   {key:"amenity",  val:"nightclub"},
+  };
+
+  // Convert radius in metres to a bounding box (rough: 1 deg lat ≈ 111km)
+  const deg = (radius / 111000) * 1.4; // slightly generous
+  const viewbox = [lng-deg, lat-deg, lng+deg, lat+deg].join(",");
+
+  const results = [];
+  const seen = new Set();
+
+  for (const id of catIds) {
+    const tag = NOMINATIM_TAGS[id];
     const cat = CATEGORIES.find(c=>c.id===id);
-    if (!cat) return "";
-    const [k,v] = cat.osm.split("=");
-    return `node["${k}"="${v}"](around:${radius},${lat},${lng});way["${k}"="${v}"](around:${radius},${lat},${lng});`;
-  }).join("\n");
-  const query = `[out:json][timeout:25];(${filters});out center 50;`;
+    if (!tag || !cat) continue;
 
-  // Try multiple public Overpass mirrors — each has slightly different CORS behaviour.
-  // Simple GET with no custom headers avoids any preflight on all of them.
-  const mirrors = [
-    "https://overpass.private.coffee/api/interpreter",
-    "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass-api.de/api/interpreter",
-  ];
-
-  let lastErr = null;
-  for (const base of mirrors) {
     try {
-      const url = base + "?data=" + encodeURIComponent(query);
-      const r = await fetch(url, {mode:"cors"});
+      const url = "https://nominatim.openstreetmap.org/search"
+        + "?" + tag.key + "=" + encodeURIComponent(tag.val)
+        + "&format=json&limit=20&addressdetails=1"
+        + "&bounded=1&viewbox=" + viewbox;
+
+      const r = await fetch(url);
       if (!r.ok) throw new Error("HTTP " + r.status);
       const data = await r.json();
-      if (!data.elements) throw new Error("No elements in response");
-      return data.elements.map(el => {
-        const elLat = el.lat ?? el.center?.lat;
-        const elLng = el.lon ?? el.center?.lon;
-        const tags  = el.tags||{};
-        let catId   = catIds[0] || "restaurant";
-        for (const cat of CATEGORIES) { const [k,v]=cat.osm.split("="); if(tags[k]===v){catId=cat.id;break;} }
-        const cat   = CATEGORIES.find(c=>c.id===catId);
-        return {
-          id: el.id, name: tags.name||"", cat: catId, icon: cat?.icon||"📍",
-          lat: elLat, lng: elLng,
-          address: [tags["addr:housenumber"],tags["addr:street"],tags["addr:city"]].filter(Boolean).join(" ")||"",
-          phone: tags.phone||tags["contact:phone"]||"",
-          website: tags.website||tags["contact:website"]||"",
-          cuisine: (tags.cuisine||"").replace(/_/g," "),
-          opening: tags.opening_hours||"",
-        };
-      }).filter(v=>v.lat&&v.lng&&v.name);
+
+      for (const d of data) {
+        if (!d.lat || !d.lon) continue;
+        const a = d.address || {};
+        // Build a clean venue name
+        const name = a.amenity || a.leisure || a.tourism || a.shop
+          || d.display_name.split(",")[0].trim();
+        if (!name || seen.has(d.place_id)) continue;
+        seen.add(d.place_id);
+
+        // Build address
+        const street   = [a.house_number, a.road].filter(Boolean).join(" ");
+        const city     = a.city || a.town || a.village || a.suburb || "";
+        const state    = a.state || "";
+        const address  = [street, city, state].filter(Boolean).join(", ");
+
+        results.push({
+          id:      d.place_id,
+          name,
+          cat:     id,
+          icon:    cat.icon,
+          lat:     +d.lat,
+          lng:     +d.lon,
+          address,
+          phone:   "",
+          website: "",
+          cuisine: "",
+          opening: "",
+        });
+      }
     } catch(e) {
-      lastErr = e;
-      console.warn("Mirror failed:", base, e.message);
+      console.warn("Nominatim venue search failed for", id, e.message);
     }
   }
 
-  // All Overpass mirrors failed — fall back to Nominatim search per category
-  console.warn("All Overpass mirrors failed, using Nominatim fallback. Last error:", lastErr?.message);
-  const results = [];
-  for (const id of catIds.slice(0,4)) {
-    const cat = CATEGORIES.find(c=>c.id===id);
-    if (!cat) continue;
-    try {
-      const term = cat.label.replace(" & ", " ");
-      const url = "https://nominatim.openstreetmap.org/search"
-        + "?q=" + encodeURIComponent(term)
-        + "&lat=" + lat + "&lon=" + lng
-        + "&bounded=0&limit=12&format=json&addressdetails=1"
-        + "&viewbox=" + (lng-0.2) + "," + (lat-0.2) + "," + (lng+0.2) + "," + (lat+0.2);
-      const r = await fetch(url);
-      const data = await r.json();
-      data.forEach(d => {
-        if (!d.lat || !d.lon || !d.display_name) return;
-        const a = d.address||{};
-        const name = a.amenity||a.shop||a.tourism||a.leisure||d.display_name.split(",")[0];
-        results.push({
-          id: d.place_id, name, cat: id, icon: cat.icon,
-          lat: +d.lat, lng: +d.lon,
-          address: [a.house_number, a.road, a.city||a.town||a.village].filter(Boolean).join(" ")||"",
-          phone:"", website:"", cuisine:"", opening:"",
-        });
-      });
-    } catch(e) { console.warn("Nominatim fallback failed for", id, e); }
-  }
-  if (results.length === 0) throw new Error("Could not reach any venue data source. Check your internet connection.");
   return results;
-
-  // (unreachable — original map moved into mirror loop above)
-  const data = {elements:[]};
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -446,7 +474,12 @@ function buildAutocomplete({placeholder, initialValue="", onSelect, onInput}) {
     drop.innerHTML = "";
     drop.style.display = results.length ? "block" : "none";
     results.forEach(r => {
-      const item = h("button", {class:"ac-item"}, "📍 ", r.label);
+      const item = h("button", {class:"ac-item"});
+      item.appendChild(h("div", {style:"font-weight:600;font-size:13px"}, "📍  " + r.label));
+      if (r.fullAddress && r.fullAddress !== r.label) {
+        const sub = r.fullAddress.split(",").slice(0,4).join(",");
+        item.appendChild(h("div", {style:"font-size:11px;color:var(--sub);margin-top:2px;padding-left:18px"}, sub));
+      }
       item.addEventListener("click", () => {
         chosen = r; inp.value = r.label; inp.classList.add("confirmed");
         check.style.display = "block"; drop.style.display = "none";
@@ -727,44 +760,12 @@ function buildContactModal(sheet, {index}) {
   hdr.append(h("div",{class:"sheet-title"},"👤 Add a Friend"), closeBtn());
   sheet.appendChild(hdr);
 
-  // Try native Contacts API (iOS Safari 14.5+, some Android)
-  const hasContactsApi = ("contacts" in navigator && "select" in (navigator.contacts || {}));
-
-  if (hasContactsApi) {
-    const nativeBtn = h("button",{class:"btn-primary",style:"margin-bottom:12px"},"📇 Pick from Contacts App");
-    nativeBtn.onclick = async () => {
-      try {
-        const results = await navigator.contacts.select(["name","address"],{multiple:false});
-        if (results && results.length) {
-          const c = results[0];
-          const name = (c.name && c.name[0]) || "";
-          const addr = c.address && c.address[0];
-          const locStr = addr ? [addr.addressLine&&addr.addressLine[0], addr.city, addr.region, addr.country].filter(Boolean).join(", ") : "";
-          if (name) nameInp.value = name;
-          if (locStr) {
-            try {
-              const geo = await nominatimSearch(locStr);
-              if (geo.length) { chosen = geo[0]; locInputEl.value = geo[0].label; }
-              else locInputEl.value = locStr;
-            } catch(e) { locInputEl.value = locStr; }
-          }
-          updateSave();
-        }
-      } catch(e) {
-        nativeBtn.textContent = "Could not access Contacts — please enter below";
-        nativeBtn.style.background = "var(--hi)";
-        nativeBtn.style.color = "var(--sub)";
-      }
-    };
-    sheet.appendChild(nativeBtn);
-    sheet.appendChild(h("div",{style:"display:flex;align-items:center;gap:8px;margin-bottom:12px"},
-      h("div",{style:"flex:1;height:1px;background:var(--border)"}),
-      h("span",{style:"color:var(--muted);font-size:11px;font-weight:600"},"or enter manually"),
-      h("div",{style:"flex:1;height:1px;background:var(--border)"})
-    ));
-  } else {
-    sheet.appendChild(h("div",{style:"color:var(--sub);font-size:12px;line-height:1.5;margin-bottom:14px;background:var(--hi);border-radius:10px;padding:10px 12px"},"Enter your friend\'s name and their city or neighbourhood."));
-  }
+  // The native ContactsManager API requires an Apple entitlement not available to web apps.
+  // The most reliable approach: name field (Safari autofill will offer contacts there),
+  // plus location search with full address precision.
+  sheet.appendChild(h("div",{style:"color:var(--sub);font-size:12px;line-height:1.5;margin-bottom:14px;background:var(--hi);border-radius:10px;padding:10px 12px"},
+    "Type your friend\'s name — Safari will suggest contacts. Then search their address or city."
+  ));
 
   // Name
   sheet.appendChild(h("div",{style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px"},"Name"));
@@ -1080,14 +1081,14 @@ async function loadResults() {
   STATE._lastRadiusM = radiusM;
 
   try {
-    const vs = await fetchOverpassVenues(mp.lat, mp.lng, STATE.categories, radiusM);
+    const vs = await fetchVenues(mp.lat, mp.lng, STATE.categories, radiusM);
     STATE.venues   = vs;
     STATE.midpt    = mp;  // set AFTER fetch — this exits the spinner
   } catch(e) {
     STATE.midpt    = mp;  // still exit spinner so user sees the error
     STATE.venues   = [];
     STATE.venueError = "Could not load venues (" + (e.message||"network error") + "). Check your connection and try again.";
-    console.error("Overpass error", e);
+    console.error("Venue fetch error", e);
   }
   render();
 }
