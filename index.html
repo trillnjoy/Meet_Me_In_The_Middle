@@ -1132,9 +1132,7 @@ function renderFriends() {
     const btns=h("div",{style:"display:flex;flex-direction:column;gap:5px"});
     const locBtn=h("button",{class:f.coords?"btn-accent-outline":"btn-primary",style:"padding:6px 12px;font-size:11px;font-weight:700;border-radius:8px"},f.coords?"📍 Change":"📍 Set Location");
     locBtn.onclick=()=>openModal("location",{index:i});
-    const cntBtn=h("button",{class:"btn-secondary"},"👤 From Contact");
-    cntBtn.onclick=()=>openModal("contact",{index:i});
-    btns.append(locBtn,cntBtn);
+    btns.append(locBtn);
     row.appendChild(btns);
     card.appendChild(row);
 
@@ -1146,9 +1144,7 @@ function renderFriends() {
     addBtn.onmouseenter=()=>{addBtn.style.borderColor="var(--accent)";addBtn.style.color="var(--accent)";addBtn.style.background="var(--accent-l)"};
     addBtn.onmouseleave=()=>{addBtn.style.borderColor="var(--border-m)";addBtn.style.color="var(--muted)";addBtn.style.background="transparent"};
     addBtn.onclick=()=>{
-      const defs=[{name:"Sam",avatar:"🧔"},{name:"Riley",avatar:"👱"}];
-      const d=defs[STATE.friends.length-2]||{name:"Friend",avatar:"🧑"};
-      STATE.friends.push({...d,id:Date.now(),color:FRIEND_COLORS[STATE.friends.length],photo:null,location:"",coords:null});
+      STATE.friends.push({name:"Friend",avatar:"🧑",id:Date.now(),color:FRIEND_COLORS[STATE.friends.length],photo:null,location:"",coords:null});
       render();
     };
     wrap.appendChild(addBtn);
