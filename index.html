@@ -9,6 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="MMITM"/>
 <link rel="manifest" href="manifest.json"/>
 <link rel="apple-touch-icon" href="icon-192.png"/>
+<link rel="icon" href="icon-192.png"/>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
 <title>Meet Me In The Middle</title>
@@ -520,19 +521,23 @@ async function findCandidateAreas() {
     throw new Error("Could not find a reachable overlap area. Try increasing travel range or check that locations are driveable.");
   }
 
-  // Sort by fairness desc, deduplicate by proximity (~2km), take top 5
+  // Sort by fairness desc, deduplicate by label name then 5km proximity, take top 5
   candidatePoints.sort((a, b) => b.fairness - a.fairness);
   const deduped = [];
+  // First pass: reverse-geocode all so we can dedupe by name
+  const allLabels = await Promise.all(candidatePoints.map(p => areaLabel(p.lat, p.lng)));
+  const seenLabels = new Set();
   for (let di = 0; di < candidatePoints.length; di++) {
     const pt = candidatePoints[di];
-    const tooClose = deduped.some(d => haversineKm(d, pt) < 2);
-    if (!tooClose) deduped.push(pt);
+    const label = allLabels[di];
+    const tooClose = deduped.some(d => haversineKm(d, pt) < 5);
+    if (seenLabels.has(label) || tooClose) continue;
+    seenLabels.add(label);
+    deduped.push({ ...pt, label });
     if (deduped.length >= 5) break;
   }
 
-  // Reverse-geocode labels in parallel
-  const labels = await Promise.all(deduped.map(p => areaLabel(p.lat, p.lng)));
-  return deduped.map((p, i) => ({ ...p, label: labels[i] }));
+  return deduped;
 }
 
 
@@ -601,6 +606,8 @@ async function fetchVenues(lat, lng, catIds, radius=2000) {
     } catch(e) {
       console.warn("Venue search failed for", id, e.message);
     }
+    // Respect Nominatim rate limit — 1 req/sec max
+    await new Promise(res => setTimeout(res, 350));
   }
 
   return results;
