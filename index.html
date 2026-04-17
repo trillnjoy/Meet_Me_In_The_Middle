@@ -536,6 +536,7 @@ async function findCandidateAreas() {
 }
 
 
+async function fetchVenues(lat, lng, catIds, radius=2000) {
   // Nominatim free-text search bounded to a viewbox around the midpoint.
   // ?q= is the only reliably supported search parameter across all result types.
   // amenity=/leisure= as standalone params return 400 — confirmed in production.
