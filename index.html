@@ -251,8 +251,7 @@ const FEATURES = [
 let STATE = {
   screen: "home",          // home | friends | categories | results
   friends: [
-    { id:0, name:"Alex",   avatar:"🧑", color:FRIEND_COLORS[0], photo:null, location:"", coords:null },
-    { id:1, name:"Jordan", avatar:"👩", color:FRIEND_COLORS[1], photo:null, location:"", coords:null },
+    { id:0, name:"Me", avatar:"🧑", color:FRIEND_COLORS[0], photo:null, location:"", coords:null },
   ],
   travelMode: "driving",
   categories: ["restaurant","bar","cafe"],
@@ -643,15 +642,28 @@ function buildLocationModal(sheet, {index}) {
   sheet.appendChild(ac.el);
 
   // Save button
-  const saveBtn = h("button", {class:"btn-primary", style:"margin-top:16px"}, "Set Location");
+  const saveBtn = h("button", {class:"btn-primary", style:"margin-top:16px"}, chosen ? "Save ✓" : "Search or use GPS to set location");
+  // Can save if: location is already confirmed (chosen set from existing coords), OR user picks a new one
   saveBtn.disabled = !chosen;
   sheet.appendChild(saveBtn);
 
-  function updateSave() { saveBtn.disabled = !chosen; saveBtn.textContent = chosen ? "Save ✓" : "Search or use GPS to set location"; }
+  function updateSave() {
+    saveBtn.disabled = !chosen;
+    saveBtn.textContent = chosen ? "Save ✓" : "Search or use GPS to set location";
+  }
+
+  // Allow saving name-only change when location is already set
+  nameInp.addEventListener("input", () => {
+    if (chosen) { saveBtn.disabled = false; saveBtn.textContent = "Save ✓"; }
+  });
 
   saveBtn.onclick = () => {
     const newName = nameInp.value.trim() || f.name;
-    STATE.friends[index] = {...f, name:newName, location:chosen.label, coords:{lat:chosen.lat, lng:chosen.lng}};
+    if (chosen) {
+      STATE.friends[index] = {...f, name:newName, location:chosen.label, coords:{lat:chosen.lat, lng:chosen.lng}};
+    } else {
+      STATE.friends[index] = {...f, name:newName};
+    }
     closeModal();
     render();
   };
@@ -663,35 +675,85 @@ function buildContactModal(sheet, {index}) {
   const f = STATE.friends[index];
 
   const hdr = h("div",{style:"display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"});
-  hdr.append(h("div",{class:"sheet-title"},"👤 Add from Contacts"), closeBtn());
+  hdr.append(h("div",{class:"sheet-title"},"👤 Add a Friend"), closeBtn());
   sheet.appendChild(hdr);
 
-  sheet.appendChild(h("div",{style:"color:var(--sub);font-size:12px;line-height:1.6;margin-bottom:16px;background:var(--hi);border-radius:10px;padding:10px 12px"},"Enter your contact's name and search their location."));
+  // Try native Contacts API (iOS Safari 14.5+, some Android)
+  const hasContactsApi = (typeof navigator.contacts !== "undefined" && typeof ContactsManager !== "undefined");
+
+  if (hasContactsApi) {
+    const nativeBtn = h("button",{class:"btn-primary",style:"margin-bottom:12px"},"📇 Pick from Contacts App");
+    nativeBtn.onclick = async () => {
+      try {
+        const results = await navigator.contacts.select(["name","address"],{multiple:false});
+        if (results && results.length) {
+          const c = results[0];
+          const name = (c.name && c.name[0]) || "";
+          const addr = c.address && c.address[0];
+          const locStr = addr ? [addr.addressLine&&addr.addressLine[0], addr.city, addr.region, addr.country].filter(Boolean).join(", ") : "";
+          if (name) nameInp.value = name;
+          if (locStr) {
+            try {
+              const geo = await nominatimSearch(locStr);
+              if (geo.length) { chosen = geo[0]; locInputEl.value = geo[0].label; }
+              else locInputEl.value = locStr;
+            } catch(e) { locInputEl.value = locStr; }
+          }
+          updateSave();
+        }
+      } catch(e) {
+        nativeBtn.textContent = "Could not access Contacts — please enter below";
+        nativeBtn.style.background = "var(--hi)";
+        nativeBtn.style.color = "var(--sub)";
+      }
+    };
+    sheet.appendChild(nativeBtn);
+    sheet.appendChild(h("div",{style:"display:flex;align-items:center;gap:8px;margin-bottom:12px"},
+      h("div",{style:"flex:1;height:1px;background:var(--border)"}),
+      h("span",{style:"color:var(--muted);font-size:11px;font-weight:600"},"or enter manually"),
+      h("div",{style:"flex:1;height:1px;background:var(--border)"})
+    ));
+  } else {
+    sheet.appendChild(h("div",{style:"color:var(--sub);font-size:12px;line-height:1.5;margin-bottom:14px;background:var(--hi);border-radius:10px;padding:10px 12px"},"Enter your friend\'s name and their city or neighbourhood."));
+  }
 
   // Name
-  sheet.appendChild(h("div",{style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px"},"Contact Name"));
-  const nameInp = h("input",{class:"inp", placeholder:"e.g. Sarah, Dad, Work Friend…", style:"margin-bottom:14px"});
-  nameInp.value = f.name;
+  sheet.appendChild(h("div",{style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px"},"Name"));
+  const nameInp = h("input",{class:"inp",placeholder:"e.g. Sarah, Dad, Work Friend\u2026",style:"margin-bottom:14px;display:block"});
+  nameInp.value = "";
   sheet.appendChild(nameInp);
 
-  // Location
+  // Location autocomplete
   sheet.appendChild(h("div",{style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px"},"Their Location"));
   const ac = buildAutocomplete({
-    placeholder:"Type city or neighbourhood…",
+    placeholder:"Type city or neighbourhood\u2026",
     onSelect: r => { chosen=r; updateSave(); },
-    onInput: ()=>{ chosen=null; updateSave(); },
+    onInput: () => { chosen=null; updateSave(); },
   });
+  const locInputEl = ac.el.querySelector("input");
   sheet.appendChild(ac.el);
 
-  const saveBtn = h("button",{class:"btn-primary",style:"margin-top:16px"},"Add Contact");
+  const saveBtn = h("button",{class:"btn-primary",style:"margin-top:16px"},"Add Friend");
   saveBtn.disabled = true;
   sheet.appendChild(saveBtn);
 
-  function updateSave(){ saveBtn.disabled = !nameInp.value.trim() || !chosen; saveBtn.textContent = (nameInp.value.trim()&&chosen) ? `Add ${nameInp.value.trim()} →` : "Enter name & location"; }
+  function updateSave() {
+    const ok = nameInp.value.trim() && chosen;
+    saveBtn.disabled = !ok;
+    saveBtn.textContent = ok ? ("Add " + nameInp.value.trim() + " \u2192") : "Enter name & location to continue";
+  }
   nameInp.addEventListener("input", updateSave);
 
   saveBtn.onclick = () => {
-    STATE.friends[index] = {...f, name:nameInp.value.trim(), location:chosen.label, coords:{lat:chosen.lat,lng:chosen.lng}};
+    const newFriend = {
+      ...f,
+      id: Date.now(),
+      name: nameInp.value.trim(),
+      location: chosen.label,
+      coords: {lat: chosen.lat, lng: chosen.lng},
+      color: f.color || FRIEND_COLORS[index] || FRIEND_COLORS[1],
+    };
+    STATE.friends[index] = newFriend;
     closeModal();
     render();
   };
@@ -871,7 +933,7 @@ function renderFriends() {
   });
 
   if (STATE.friends.length<4) {
-    const addBtn=h("button",{style:"width:100%;background:transparent;border:1.5px dashed var(--border-m);border-radius:14px;color:var(--muted);padding:12px 0;font-size:13px;font-weight:600;margin-bottom:18px;transition:all .18s"},"+ Add another person ("+STATE.friends.length+"/4)");
+    const addBtn=h("button",{style:"width:100%;background:transparent;border:1.5px dashed var(--border-m);border-radius:14px;color:var(--muted);padding:12px 0;font-size:13px;font-weight:600;margin-bottom:18px;transition:all .18s"},"+ Add friend "+STATE.friends.length+" of 4");
     addBtn.onmouseenter=()=>{addBtn.style.borderColor="var(--accent)";addBtn.style.color="var(--accent)";addBtn.style.background="var(--accent-l)"};
     addBtn.onmouseleave=()=>{addBtn.style.borderColor="var(--border-m)";addBtn.style.color="var(--muted)";addBtn.style.background="transparent"};
     addBtn.onclick=()=>{
@@ -958,7 +1020,17 @@ async function loadResults() {
   STATE.midpt=mp;
 
   try {
-    const vs=await fetchOverpassVenues(mp.lat,mp.lng,STATE.categories,2000);
+    // Scale search radius: half the max distance between any two friends, min 1km, max 15km
+    const activeFr = STATE.friends.filter(f=>f.coords);
+    let maxDist = 0;
+    for (let a=0; a<activeFr.length; a++) {
+      for (let b=a+1; b<activeFr.length; b++) {
+        const d = haversineKm(activeFr[a].coords, activeFr[b].coords);
+        if (d > maxDist) maxDist = d;
+      }
+    }
+    const radiusM = Math.round(Math.min(Math.max(maxDist * 500, 1000), 15000));
+    const vs=await fetchOverpassVenues(mp.lat,mp.lng,STATE.categories,radiusM);
     STATE.venues=vs;
   } catch(e) {
     STATE.venues=[];
@@ -1171,6 +1243,25 @@ if ("serviceWorker" in navigator) {
 }
 
 render();
+
+// Auto-detect location for the first friend (slot 0) on startup
+(async () => {
+  if (!navigator.geolocation) return;
+  try {
+    await new Promise((resolve, reject) =>
+      navigator.geolocation.getCurrentPosition(resolve, reject, {timeout:8000, maximumAge:120000})
+    ).then(async pos => {
+      try {
+        const r = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
+        if (STATE.friends[0] && !STATE.friends[0].coords) {
+          STATE.friends[0].location = r.label;
+          STATE.friends[0].coords   = {lat: r.lat, lng: r.lng};
+          if (STATE.screen === "friends") render();
+        }
+      } catch(e) { /* reverse geocode failed, silently ignore */ }
+    });
+  } catch(e) { /* GPS denied or unavailable, silently ignore */ }
+})();
 </script>
 </body>
 </html>
