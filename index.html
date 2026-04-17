@@ -443,11 +443,11 @@ async function fetchIsochrone(lat, lng, minutes, profile) {
 // Reverse-geocode a coordinate to a neighborhood/area name via Nominatim
 async function areaLabel(lat, lng) {
   try {
-    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=12`;
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=14`;
     const r = await fetch(url);
     const d = await r.json();
     const a = d.address || {};
-    return a.neighbourhood || a.suburb || a.quarter || a.village || a.town || a.city || a.county || "Area";
+    return a.neighbourhood || a.suburb || a.quarter || a.village || a.town || a.city_district || a.city || a.county || "Area";
   } catch { return "Area"; }
 }
 
