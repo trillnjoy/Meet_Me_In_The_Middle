@@ -343,8 +343,18 @@ function midpoint(coords) {
 }
 
 function fairnessPct(times) {
-  const mx = Math.max(...times), mn = Math.min(...times);
-  return mx > 0 ? Math.round((1-(mx-mn)/mx)*100) : 100;
+  if (!times.length) return 100;
+  const mx = Math.max(...times);
+  const mn = Math.min(...times);
+  const avg = times.reduce((a,b)=>a+b,0) / times.length;
+  // Sub-5min spread is travel noise — treat as perfectly equitable
+  const spread = Math.max(0, (mx - mn) - 5);
+  // Equity: penalize spread beyond the floor
+  const equity = mx > 0 ? Math.max(0, 1 - spread / mx) : 1;
+  // Magnitude: reward venues close to everyone; 30min is the penalty ceiling
+  const magnitude = Math.max(0, 1 - avg / 30);
+  // Combined: equity weighted 60%, proximity 40%
+  return Math.round((equity * 0.6 + magnitude * 0.4) * 100);
 }
 
 function avatarEl(f, size=44) {
