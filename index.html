@@ -174,6 +174,13 @@ button { cursor: pointer; border: none; background: none; }
 .vibe-btn .vibe-label { font-size: 10px; font-weight: 700; color: var(--sub); white-space: nowrap; }
 .vibe-btn.on .vibe-label { color: var(--accent); }
 
+/* ── Settings ── */
+.settings-tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.settings-tab { flex: 1; background: transparent; border: none; border-bottom: 2.5px solid transparent; color: var(--sub); padding: 9px 4px; font-size: 13px; font-weight: 700; transition: all .16s; }
+.settings-tab.active { border-bottom-color: var(--accent); color: var(--accent); }
+.contact-card { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); position: relative; }
+.contact-card:last-child { border-bottom: none; }
+
 /* ── Vote ── */
 .vote-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 8px; display: flex; gap: 10px; align-items: center; box-shadow: 0 1px 5px var(--sh); }
 .vote-btn { background: var(--hi); border: 1.5px solid var(--border); border-radius: 9px; padding: 7px 10px; font-size: 14px; transition: all .14s; }
@@ -271,13 +278,52 @@ const FEATURES = [
 ];
 
 /* ══════════════════════════════════════════════════════════════
-   APP STATE
+   PERSISTENT STORAGE — profile, contacts, defaults
 ══════════════════════════════════════════════════════════════ */
+const LS_PROFILE  = "mmitm_profile";
+const LS_CONTACTS = "mmitm_contacts";
+const LS_DEFAULTS = "mmitm_defaults";
+
+function loadProfile() {
+  try { return JSON.parse(localStorage.getItem(LS_PROFILE)) || null; } catch { return null; }
+}
+function saveProfile(p) {
+  try { localStorage.setItem(LS_PROFILE, JSON.stringify(p)); } catch {}
+}
+function loadContacts() {
+  try { return JSON.parse(localStorage.getItem(LS_CONTACTS)) || []; } catch { return []; }
+}
+function saveContacts(c) {
+  try { localStorage.setItem(LS_CONTACTS, JSON.stringify(c)); } catch {}
+}
+function loadDefaults() {
+  try { return JSON.parse(localStorage.getItem(LS_DEFAULTS)) || {}; } catch { return {}; }
+}
+function saveDefaults(d) {
+  try { localStorage.setItem(LS_DEFAULTS, JSON.stringify(d)); } catch {}
+}
+
+// Build the "Me" friend slot from stored profile (or fallback)
+function meFromProfile() {
+  const p = loadProfile();
+  return p
+    ? { id:0, name:p.name||"Me", avatar:p.avatar||"🧑", color:p.color||FRIEND_COLORS[0], photo:p.photo||null, location:"", coords:null }
+    : { id:0, name:"Me", avatar:"🧑", color:FRIEND_COLORS[0], photo:null, location:"", coords:null };
+}
+
+// Apply saved defaults to STATE
+function applyDefaults() {
+  const d = loadDefaults();
+  if (d.travelMode) STATE.travelMode = d.travelMode;
+  if (d.categories && d.categories.length) STATE.categories = d.categories;
+  if (d.allowTolls !== undefined) STATE.allowTolls = d.allowTolls;
+  if (d.allowFerry !== undefined) STATE.allowFerry = d.allowFerry;
+}
+
+
 let STATE = {
-  screen: "home",          // home | friends | categories | areas | results
-  friends: [
-    { id:0, name:"Me", avatar:"🧑", color:FRIEND_COLORS[0], photo:null, location:"", coords:null },
-  ],
+  screen: "home",
+  friends: [ meFromProfile() ],
   travelMode: "driving",
   allowTolls: true,
   allowFerry: false,
@@ -285,8 +331,8 @@ let STATE = {
   vibe: "casual",
   venues: [],
   midpt: null,
-  candidateAreas: [],      // [{lat,lng,label,times,fairness}]
-  selectedAreas: [],       // indices into candidateAreas chosen by user
+  candidateAreas: [],
+  selectedAreas: [],
   votes: {},
   saved: [],
   activeTab: "list",
@@ -294,8 +340,8 @@ let STATE = {
   venueError: "",
   areaError: "",
   _lastRadiusM: 3000,
-  modal: null,   // null | "avatar" | "location" | "contact" | "info" | "venue"
-  modalData: {}, // context for open modal
+  modal: null,
+  modalData: {},
   mapInstance: null,
   mapMarkers: [],
 };
@@ -704,10 +750,213 @@ function renderModal() {
   sheet.appendChild(h("div", {class:"drag-handle"}));
 
   if (STATE.modal === "info")     buildInfoModal(sheet);
+  if (STATE.modal === "settings") buildSettingsModal(sheet);
   if (STATE.modal === "avatar")   buildAvatarModal(sheet, STATE.modalData);
   if (STATE.modal === "location") buildLocationModal(sheet, STATE.modalData);
   if (STATE.modal === "contact")  buildContactModal(sheet, STATE.modalData);
   if (STATE.modal === "venue")    buildVenueModal(sheet, STATE.modalData);
+}
+
+/* ── Settings modal ── */
+function buildSettingsModal(sheet) {
+  const hdr = h("div",{style:"display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"});
+  hdr.append(h("div",{style:"font-family:Georgia,serif;font-size:17px;font-weight:800"},"⚙️ Settings"), closeBtn());
+  sheet.appendChild(hdr);
+
+  // Tab state
+  let activeTab = "me";
+  const tabContent = h("div",{});
+  sheet.appendChild(h("div",{style:"margin-bottom:0"},buildSettingsTabs()));
+  sheet.appendChild(tabContent);
+
+  function buildSettingsTabs() {
+    const tabs = h("div",{class:"settings-tabs"});
+    [["me","Me"],["you","You"],["defaults","What We Do"]].forEach(([id,lb])=>{
+      const t = h("button",{class:`settings-tab${activeTab===id?" active":""}`},lb);
+      t.onclick=()=>{ activeTab=id; renderTab(); };
+      tabs.appendChild(t);
+    });
+    return tabs;
+  }
+
+  function renderTab() {
+    // Rebuild tabs to update active state
+    const tabsEl = sheet.querySelector(".settings-tabs");
+    if (tabsEl) {
+      const newTabs = buildSettingsTabs();
+      tabsEl.replaceWith(newTabs);
+    }
+    tabContent.innerHTML = "";
+    if (activeTab === "me")       buildMeTab(tabContent);
+    else if (activeTab === "you") buildYouTab(tabContent);
+    else                          buildDefaultsTab(tabContent);
+  }
+
+  renderTab();
+}
+
+function buildMeTab(wrap) {
+  const p = loadProfile() || { name:"Me", avatar:"🧑", color:FRIEND_COLORS[0], photo:null };
+  let name = p.name, avatar = p.avatar, color = p.color, photo = p.photo;
+
+  // Avatar preview
+  const previewWrap = h("div",{style:"display:flex;justify-content:center;margin-bottom:16px;position:relative;width:fit-content;margin-left:auto;margin-right:auto"});
+  const previewAv = h("div",{class:"avatar",style:`width:72px;height:72px;background:${color}22;border:3px solid ${color};font-size:${photo?0:32}px`});
+  if (photo) { const img=h("img",{src:photo,alt:"",style:"width:100%;height:100%;object-fit:cover;border-radius:50%"}); previewAv.appendChild(img); }
+  else previewAv.textContent = avatar;
+  previewWrap.appendChild(previewAv);
+  wrap.appendChild(previewWrap);
+
+  function refreshPreview() {
+    previewAv.style.fontSize = photo ? "0" : "32px";
+    previewAv.style.background = color+"22";
+    previewAv.style.border = `3px solid ${color}`;
+    previewAv.innerHTML = "";
+    if (photo) { const img=h("img",{src:photo,alt:"",style:"width:100%;height:100%;object-fit:cover;border-radius:50%"}); previewAv.appendChild(img); }
+    else previewAv.textContent = avatar;
+  }
+
+  // Name
+  wrap.appendChild(h("div",{style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px"},"Your Name"));
+  const nameInp = h("input",{class:"inp",placeholder:"Your name",style:"margin-bottom:14px;display:block"});
+  nameInp.value = name;
+  nameInp.oninput = ()=>{ name = nameInp.value.trim(); };
+  wrap.appendChild(nameInp);
+
+  // Photo
+  const fileRef = h("input",{type:"file",accept:"image/*",style:"display:none"});
+  wrap.appendChild(fileRef);
+  wrap.appendChild(h("div",{style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px"},"Photo"));
+  const photoBtns = h("div",{style:"display:flex;gap:8px;margin-bottom:14px"});
+  const selfieBtn = h("button",{class:"btn-secondary",style:"flex:1;padding:9px"},"📷 Selfie");
+  const galleryBtn = h("button",{class:"btn-secondary",style:"flex:1;padding:9px"},"🖼️ Gallery");
+  const clearBtn = h("button",{class:"btn-secondary",style:"flex:1;padding:9px"},"✕ Clear");
+  selfieBtn.onclick = ()=>{ fileRef.setAttribute("capture","user"); fileRef.click(); };
+  galleryBtn.onclick = ()=>{ fileRef.removeAttribute("capture"); fileRef.click(); };
+  clearBtn.onclick = ()=>{ photo=null; refreshPreview(); };
+  photoBtns.append(selfieBtn, galleryBtn, clearBtn);
+  wrap.appendChild(photoBtns);
+  fileRef.onchange = e => {
+    const file = e.target.files?.[0]; if(!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => { photo = ev.target.result; refreshPreview(); };
+    reader.readAsDataURL(file);
+  };
+
+  // Color
+  wrap.appendChild(h("div",{style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px"},"Colour"));
+  const colorRow = h("div",{style:"display:flex;gap:9px;flex-wrap:wrap;margin-bottom:14px"});
+  COLOR_OPTIONS.forEach(c => {
+    const btn = h("button",{style:`width:34px;height:34px;border-radius:17px;background:${c};border:none;outline:${color===c?`3px solid ${c}`:"3px solid transparent"};outline-offset:3px;transform:${color===c?"scale(1.15)":"none"};transition:all .14s`});
+    btn.onclick = ()=>{ color=c; refreshPreview(); colorRow.querySelectorAll("button").forEach((b,i)=>{ const cc=COLOR_OPTIONS[i]; b.style.outline=cc===c?`3px solid ${cc}`:"3px solid transparent"; b.style.transform=cc===c?"scale(1.15)":"none"; }); };
+    colorRow.appendChild(btn);
+  });
+  wrap.appendChild(colorRow);
+
+  // Emoji
+  wrap.appendChild(h("div",{style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px"},"Emoji"));
+  const grid = h("div",{style:"display:grid;grid-template-columns:repeat(8,1fr);gap:5px;margin-bottom:16px"});
+  AVATAR_OPTIONS.forEach(a => {
+    const btn = h("button",{style:`background:${(!photo&&avatar===a)?color+"22":"var(--hi)"};border:1.5px solid ${(!photo&&avatar===a)?color:"var(--border)"};border-radius:9px;padding:5px 0;font-size:18px;transition:all .13s`},a);
+    btn.onclick = ()=>{ avatar=a; photo=null; refreshPreview(); grid.querySelectorAll("button").forEach((b,i)=>{ const av=AVATAR_OPTIONS[i]; b.style.background=av===a?color+"22":"var(--hi)"; b.style.borderColor=av===a?color:"var(--border)"; }); };
+    grid.appendChild(btn);
+  });
+  wrap.appendChild(grid);
+
+  const saveBtn = h("button",{class:"btn-primary"},"Save Profile");
+  saveBtn.onclick = ()=>{
+    const profile = { name:nameInp.value.trim()||"Me", avatar, color, photo };
+    saveProfile(profile);
+    // Update Me slot in current session
+    STATE.friends[0] = { ...STATE.friends[0], name:profile.name, avatar:profile.avatar, color:profile.color, photo:profile.photo };
+    closeModal();
+    render();
+  };
+  wrap.appendChild(saveBtn);
+}
+
+function buildYouTab(wrap) {
+  let contacts = loadContacts();
+
+  function renderContacts() {
+    wrap.innerHTML = "";
+    if (contacts.length === 0) {
+      wrap.appendChild(h("div",{style:"color:var(--sub);font-size:13px;text-align:center;padding:24px 0;line-height:1.6"},"No saved contacts yet.\nSave friends during planning to build your shortlist."));
+    } else {
+      const list = h("div",{style:"margin-bottom:16px"});
+      contacts.forEach((c, ci) => {
+        const card = h("div",{class:"contact-card"});
+        // Remove badge
+        const remWrap = h("div",{style:"position:relative;flex-shrink:0"});
+        const av = avatarEl(c, 44);
+        const remBadge = h("button",{style:"position:absolute;top:-4px;left:-4px;width:20px;height:20px;border-radius:50%;background:var(--coral);border:2px solid var(--surface);color:white;font-size:11px;font-weight:900;display:flex;align-items:center;justify-content:center;z-index:10;padding:0"},"×");
+        remBadge.onclick = ()=>{
+          if (confirm(`Remove ${c.name} from your contacts?`)) {
+            contacts.splice(ci, 1);
+            saveContacts(contacts);
+            renderContacts();
+          }
+        };
+        remWrap.append(av, remBadge);
+        card.appendChild(remWrap);
+        const info = h("div",{style:"flex:1;min-width:0"});
+        info.appendChild(h("div",{style:"font-weight:700;font-size:13px"},c.name));
+        info.appendChild(h("div",{style:"color:var(--sub);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"},c.location||"No address"));
+        card.appendChild(info);
+        list.appendChild(card);
+      });
+      wrap.appendChild(list);
+    }
+    if (contacts.length < 12) {
+      wrap.appendChild(h("div",{style:"color:var(--muted);font-size:11px;text-align:center;margin-top:8px"},`${contacts.length}/12 saved contacts`));
+    } else {
+      wrap.appendChild(h("div",{style:"color:var(--gold);font-size:11px;text-align:center;margin-top:8px"},"Shortlist full (12/12)"));
+    }
+  }
+
+  renderContacts();
+}
+
+function buildDefaultsTab(wrap) {
+  const d = loadDefaults();
+  let travelMode = d.travelMode || "driving";
+  let categories = d.categories ? [...d.categories] : ["restaurant","bar","cafe"];
+
+  wrap.appendChild(h("div",{style:"font-weight:700;font-size:13px;margin-bottom:9px"},"Default travel mode"));
+  const pills = h("div",{class:"pills",style:"margin-bottom:20px"});
+  [["🚗","driving","Driving"],["🚇","transit","Transit"],["🚶","walking","Walking"],["🚲","cycling","Cycling"]].forEach(([ic,id,lb])=>{
+    const p = h("button",{class:`pill${travelMode===id?" active":""}`},ic+" "+lb);
+    p.onclick = ()=>{ travelMode=id; pills.querySelectorAll(".pill").forEach((el,i)=>{ el.className="pill"+(["driving","transit","walking","cycling"][i]===id?" active":""); }); };
+    pills.appendChild(p);
+  });
+  wrap.appendChild(pills);
+
+  wrap.appendChild(h("div",{style:"font-weight:700;font-size:13px;margin-bottom:9px"},"Default venue categories"));
+  const grid = h("div",{class:"cat-grid",style:"margin-bottom:20px"});
+  CATEGORIES.forEach(cat=>{
+    const on = categories.includes(cat.id);
+    const item = h("button",{class:`cat-item${on?" on":""}`},h("span",{class:"icon"},cat.icon),h("span",{class:"label"},cat.label));
+    if(on) item.appendChild(h("span",{class:"cat-check"},"✓"));
+    item.onclick=()=>{
+      if(categories.includes(cat.id)) categories=categories.filter(x=>x!==cat.id);
+      else categories.push(cat.id);
+      item.className=`cat-item${categories.includes(cat.id)?" on":""}`;
+      item.innerHTML="";
+      item.append(h("span",{class:"icon"},cat.icon),h("span",{class:"label"},cat.label));
+      if(categories.includes(cat.id)) item.appendChild(h("span",{class:"cat-check"},"✓"));
+    };
+    grid.appendChild(item);
+  });
+  wrap.appendChild(grid);
+
+  const saveBtn = h("button",{class:"btn-primary"},"Save Defaults");
+  saveBtn.onclick = ()=>{
+    const defaults = { travelMode, categories };
+    saveDefaults(defaults);
+    applyDefaults();
+    closeModal();
+  };
+  wrap.appendChild(saveBtn);
 }
 
 /* ── Info modal ── */
@@ -915,14 +1164,33 @@ function buildLocationModal(sheet, {index}) {
 
   saveBtn.onclick = () => {
     const newName = nameInp.value.trim() || f.name;
-    if (chosen) {
-      STATE.friends[index] = {...f, name:newName, location:chosen.label, coords:{lat:chosen.lat, lng:chosen.lng}};
-    } else {
-      STATE.friends[index] = {...f, name:newName};
-    }
+    const updatedFriend = chosen
+      ? {...f, name:newName, location:chosen.label, coords:{lat:chosen.lat, lng:chosen.lng}}
+      : {...f, name:newName};
+    STATE.friends[index] = updatedFriend;
     closeModal();
     render();
   };
+
+  // Save to shortlist — only for non-Me slots with a confirmed location
+  if (index > 0) {
+    const shortlistBtn = h("button",{class:"btn-secondary",style:"width:100%;margin-top:8px;padding:10px"},"⭐ Save to My Contacts");
+    shortlistBtn.onclick = () => {
+      const newName = nameInp.value.trim() || f.name;
+      if (!chosen && !f.coords) { alert("Set a location first."); return; }
+      const loc = chosen || {label:f.location, lat:f.coords.lat, lng:f.coords.lng};
+      const contacts = loadContacts();
+      if (contacts.length >= 12) { alert("Contacts full (12/12). Remove one in Settings first."); return; }
+      const exists = contacts.findIndex(c => c.name === newName);
+      const entry = { id:Date.now(), name:newName, avatar:f.avatar, color:f.color, photo:f.photo||null, location:loc.label, coords:{lat:loc.lat, lng:loc.lng} };
+      if (exists >= 0) contacts[exists] = entry;
+      else contacts.push(entry);
+      saveContacts(contacts);
+      shortlistBtn.textContent = "⭐ Saved!";
+      shortlistBtn.disabled = true;
+    };
+    form.appendChild(shortlistBtn);
+  }
 }
 
 /* ── Contact modal ── */
@@ -1090,8 +1358,11 @@ function buildLeafletMap(containerId) {
 function renderHome() {
   const wrap = h("div",{class:"home-wrap"});
 
-  // Info button
-  const infoBtn=h("button",{class:"nav-icon-btn",style:"position:absolute;top:14px;right:16px"},  "ⓘ");
+  // Gear (settings) button top-left, info button top-right
+  const gearBtn=h("button",{class:"nav-icon-btn",style:"position:absolute;top:14px;left:16px"},"⚙️");
+  gearBtn.onclick=()=>openModal("settings");
+  wrap.appendChild(gearBtn);
+  const infoBtn=h("button",{class:"nav-icon-btn",style:"position:absolute;top:14px;right:16px"},"ⓘ");
   infoBtn.onclick=()=>openModal("info");
   wrap.appendChild(infoBtn);
 
@@ -1158,7 +1429,28 @@ function renderFriends() {
   });
 
   if (STATE.friends.length<4) {
-    const addBtn=h("button",{style:"width:100%;background:transparent;border:1.5px dashed var(--border-m);border-radius:14px;color:var(--muted);padding:12px 0;font-size:13px;font-weight:600;margin-bottom:18px;transition:all .18s"},"+ Add friend "+STATE.friends.length+" of 4");
+    // Shortlist picker — saved contacts not already in session
+    const contacts = loadContacts();
+    const inSession = new Set(STATE.friends.map(f=>f.name));
+    const available = contacts.filter(c => !inSession.has(c.name));
+    if (available.length > 0) {
+      wrap.appendChild(h("div",{style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px"},"From your contacts"));
+      const scroller = h("div",{style:"display:flex;gap:8px;overflow-x:auto;padding-bottom:8px;margin-bottom:12px"});
+      available.forEach(c => {
+        const chip = h("button",{style:`display:flex;align-items:center;gap:7px;background:var(--surface);border:1.5px solid var(--border);border-radius:99px;padding:5px 12px 5px 5px;flex-shrink:0;transition:all .15s`});
+        chip.append(avatarEl(c,28), h("span",{style:"font-size:12px;font-weight:600;color:var(--text)"},c.name));
+        chip.onclick=()=>{
+          const newF = { ...c, id:Date.now(), color:FRIEND_COLORS[STATE.friends.length] };
+          STATE.friends.push(newF);
+          render();
+        };
+        scroller.appendChild(chip);
+      });
+      wrap.appendChild(scroller);
+    }
+
+    const nextSlot = STATE.friends.length + 1;
+    const addBtn=h("button",{style:"width:100%;background:transparent;border:1.5px dashed var(--border-m);border-radius:14px;color:var(--muted);padding:12px 0;font-size:13px;font-weight:600;margin-bottom:18px;transition:all .18s"},`+ Add friend ${nextSlot} of 4`);
     addBtn.onmouseenter=()=>{addBtn.style.borderColor="var(--accent)";addBtn.style.color="var(--accent)";addBtn.style.background="var(--accent-l)"};
     addBtn.onmouseleave=()=>{addBtn.style.borderColor="var(--border-m)";addBtn.style.color="var(--muted)";addBtn.style.background="transparent"};
     addBtn.onclick=()=>{
@@ -1561,8 +1853,7 @@ function render() {
       const prev={friends:"home",categories:"friends",areas:"categories",results:"areas"};
       const nextScreen = prev[STATE.screen]||"home";
       if (nextScreen === "home") {
-        // Reset session state so next planning starts fresh
-        STATE.friends = [{ id:0, name:"Me", avatar:"🧑", color:FRIEND_COLORS[0], photo:null, location:"", coords:null }];
+        STATE.friends = [ meFromProfile() ];
         STATE.categories = ["restaurant","bar","cafe"];
         STATE.vibe = "casual";
         STATE.venues = [];
@@ -1575,6 +1866,7 @@ function render() {
         STATE.areaError = "";
         STATE.activeTab = "list";
         STATE.venueFilter = "all";
+        applyDefaults();
       }
       setState({screen:nextScreen});
       render();
@@ -1611,6 +1903,10 @@ updateClock();
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("./sw.js").catch(()=>{});
 }
+
+// Apply saved defaults and profile before first render
+applyDefaults();
+STATE.friends[0] = meFromProfile();
 
 render();
 
