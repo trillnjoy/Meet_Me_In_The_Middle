@@ -461,6 +461,54 @@ async function areaLabel(lat, lng) {
   } catch { return "Area"; }
 }
 
+// Find densest commercial cluster strictly within the isochrone intersection polygon.
+// Probes restaurant only (most reliably OSM-tagged), filters to polygon, then grids.
+// Falls back to the geometric centroid if nothing survives the polygon filter.
+async function commercialAnchor(intersection, bbox, fallback) {
+  try {
+    const [minLng, minLat, maxLng, maxLat] = bbox;
+    const viewbox = `${minLng},${minLat},${maxLng},${maxLat}`;
+    const url = "https://nominatim.openstreetmap.org/search"
+      + "?q=restaurant&format=json&limit=50&addressdetails=0"
+      + "&bounded=1&viewbox=" + viewbox;
+    const r = await fetch(url);
+    if (!r.ok) return fallback;
+    const data = await r.json();
+
+    // Filter to only results inside the actual polygon — not just the loose bbox
+    const inside = [];
+    for (let i = 0; i < data.length; i++) {
+      const pt = turf.point([+data[i].lon, +data[i].lat]);
+      try {
+        if (turf.booleanPointInPolygon(pt, intersection)) inside.push(data[i]);
+      } catch { /* skip malformed */ }
+    }
+    if (!inside.length) return fallback;
+
+    // Grid the bbox into 3x3 cells, count venues per cell
+    const cols = 3, rows = 3;
+    const cellW = (maxLng - minLng) / cols;
+    const cellH = (maxLat - minLat) / rows;
+    const grid = [];
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        grid.push({ count: 0, latSum: 0, lngSum: 0 });
+      }
+    }
+    for (let i = 0; i < inside.length; i++) {
+      const lat = +inside[i].lat, lng = +inside[i].lon;
+      const col = Math.min(cols-1, Math.floor((lng - minLng) / cellW));
+      const row = Math.min(rows-1, Math.floor((lat - minLat) / cellH));
+      const cell = grid[row * cols + col];
+      cell.count++; cell.latSum += lat; cell.lngSum += lng;
+    }
+    grid.sort((a, b) => b.count - a.count);
+    const best = grid[0];
+    if (best.count === 0) return fallback;
+    return { lat: best.latSum / best.count, lng: best.lngSum / best.count };
+  } catch { return fallback; }
+}
+
 // Core Phase 1: compute candidate meet areas using isochrone intersections
 // Strategy: step up time intervals until intersections exist; score by fairness
 async function findCandidateAreas() {
@@ -515,13 +563,14 @@ async function findCandidateAreas() {
     }
 
     // Score each point by travel-time fairness (using haversine estimate for now)
-    const isoBbox = [bbox[0], bbox[1], bbox[2], bbox[3]]; // [minLng, minLat, maxLng, maxLat]
+    const isoBbox = [bbox[0], bbox[1], bbox[2], bbox[3]];
     for (let pi = 0; pi < pts.length; pi++) {
       const pt = pts[pi];
       const times = activeFriends.map(f => estimateMins(f.coords, pt, STATE.travelMode));
       const mx = Math.max(...times), mn = Math.min(...times);
       const fairness = mx > 0 ? Math.round((1 - (mx - mn) / mx) * 100) : 100;
-      candidatePoints.push({ lat: pt.lat, lng: pt.lng, times, fairness, mins, bbox: isoBbox });
+      // Store the intersection polygon so the anchor probe can filter to it
+      candidatePoints.push({ lat: pt.lat, lng: pt.lng, times, fairness, mins, bbox: isoBbox, polygon: intersection });
     }
 
     // If we have enough candidates, stop stepping up
@@ -532,23 +581,34 @@ async function findCandidateAreas() {
     throw new Error("Could not find a reachable overlap area. Try increasing travel range or check that locations are driveable.");
   }
 
-  // Sort by fairness desc, deduplicate by label name then 5km proximity, take top 5
+  // Sort by fairness desc, deduplicate by 5km proximity, take top 5
   candidatePoints.sort((a, b) => b.fairness - a.fairness);
   const deduped = [];
-  // First pass: reverse-geocode all so we can dedupe by name
-  const allLabels = await Promise.all(candidatePoints.map(p => areaLabel(p.lat, p.lng)));
-  const seenLabels = new Set();
   for (let di = 0; di < candidatePoints.length; di++) {
     const pt = candidatePoints[di];
-    const label = allLabels[di];
     const tooClose = deduped.some(d => haversineKm(d, pt) < 5);
-    if (seenLabels.has(label) || tooClose) continue;
-    seenLabels.add(label);
-    deduped.push({ ...pt, label });
+    if (!tooClose) deduped.push(pt);
     if (deduped.length >= 5) break;
   }
 
-  return deduped;
+  // For each candidate: find the densest commercial cluster strictly inside
+  // the isochrone intersection polygon, then label from that anchor point.
+  const results = [];
+  const seenLabels = new Set();
+  for (let di = 0; di < deduped.length; di++) {
+    const pt = deduped[di];
+    const anchor = await commercialAnchor(pt.polygon, pt.bbox, pt);
+    await new Promise(res => setTimeout(res, 300));
+    const label = await areaLabel(anchor.lat, anchor.lng);
+    if (seenLabels.has(label)) continue;
+    seenLabels.add(label);
+    const times = activeFriends.map(f => estimateMins(f.coords, anchor, STATE.travelMode));
+    const mx = Math.max(...times), mn = Math.min(...times);
+    const fairness = mx > 0 ? Math.round((1 - (mx - mn) / mx) * 100) : 100;
+    results.push({ lat: anchor.lat, lng: anchor.lng, times, fairness, mins: pt.mins, label });
+  }
+
+  return results.length > 0 ? results : deduped.map(p => ({ ...p, label: "Area" }));
 }
 
 
