@@ -1806,11 +1806,11 @@ function samplePolyline(coords, n) {
 // Reverse-geocode a point to a city name at city zoom level
 async function cityLabel(lat, lng) {
   try {
-    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=10`;
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=12`;
     const r = await fetch(url);
     const d = await r.json();
     const a = d.address || {};
-    const city = a.city || a.town || a.village || a.county || "";
+    const city = a.city || a.town || a.village || a.municipality || a.county || "";
     const state = a.state || "";
     return [city, state].filter(Boolean).join(", ") || "Unknown";
   } catch { return "Unknown"; }
