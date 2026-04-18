@@ -298,7 +298,19 @@ function loadProfile() {
   try { return JSON.parse(localStorage.getItem(LS_PROFILE)) || null; } catch { return null; }
 }
 function saveProfile(p) {
-  try { localStorage.setItem(LS_PROFILE, JSON.stringify(p)); } catch {}
+  try {
+    const json = JSON.stringify(p);
+    localStorage.setItem(LS_PROFILE, json);
+    return true;
+  } catch(e) {
+    // localStorage full or quota exceeded — try saving without photo
+    try {
+      const slim = { ...p, photo: null };
+      localStorage.setItem(LS_PROFILE, JSON.stringify(slim));
+      console.warn("Profile photo too large for localStorage — saved without photo.");
+      return false;
+    } catch { return false; }
+  }
 }
 function loadContacts() {
   try { return JSON.parse(localStorage.getItem(LS_CONTACTS)) || []; } catch { return []; }
@@ -883,7 +895,7 @@ function showCropOverlay(dataUrl, onConfirm) {
     // Scale tx/ty from display (280px) to canvas (300px)
     const ratio = 300 / SIZE;
     ctx.drawImage(img, tx*ratio, ty*ratio, imgW*scale*ratio, imgH*scale*ratio);
-    const cropped = canvas.toDataURL("image/jpeg", 0.85);
+    const cropped = canvas.toDataURL("image/jpeg", 0.6);
     overlay.remove();
     onConfirm(cropped);
   };
@@ -998,15 +1010,19 @@ function buildMeTab(wrap) {
   wrap.appendChild(grid);
 
   const saveBtn = h("button",{class:"btn-primary"},"Save Profile");
+  const saveWarn = h("div",{style:"color:var(--gold);font-size:11px;text-align:center;margin-top:6px;display:none"},"⚠️ Photo too large to save — try a smaller image or use an emoji instead.");
   saveBtn.onclick = ()=>{
     const profile = { name:nameInp.value.trim()||"Me", avatar, color, photo };
-    saveProfile(profile);
-    // Update Me slot in current session
+    const saved = saveProfile(profile);
+    if (!saved && photo) {
+      saveWarn.style.display = "block";
+      // Still update session with photo even if localStorage failed
+    }
     STATE.friends[0] = { ...STATE.friends[0], name:profile.name, avatar:profile.avatar, color:profile.color, photo:profile.photo };
-    closeModal();
-    render();
+    if (saved) { closeModal(); render(); }
   };
   wrap.appendChild(saveBtn);
+  wrap.appendChild(saveWarn);
 }
 
 function buildYouTab(wrap) {
