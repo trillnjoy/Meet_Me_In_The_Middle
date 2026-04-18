@@ -350,6 +350,8 @@ let STATE = {
   venueError: "",
   areaError: "",
   longDistance: false,
+  corridorRoutes: [],   // [{name, color, cities:[{lat,lng,label,times,fairness}]}]
+  activeCorridorIdx: 0, // which route tab is shown
   _lastRadiusM: 3000,
   modal: null,
   modalData: {},
@@ -1682,32 +1684,186 @@ function renderCategories() {
 
 /* ── Load candidate areas (Phase 1 ORS) ── */
 // Sample city names along the corridor between two extreme points
-async function corridorCities(from, to) {
-  const cities = [];
-  const seen = new Set();
-  // 7 evenly spaced points including endpoints excluded — interior only
-  const steps = 7;
-  for (let i = 1; i < steps; i++) {
-    const t = i / steps;
-    const lat = from.lat + (to.lat - from.lat) * t;
-    const lng = from.lng + (to.lng - from.lng) * t;
-    try {
-      // Zoom 8 = city level
-      const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=10`;
-      const r = await fetch(url);
-      const d = await r.json();
-      const a = d.address || {};
-      const city = a.city || a.town || a.village || a.county || a.state_district || "";
-      const state = a.state || "";
-      const label = [city, state].filter(Boolean).join(", ");
-      if (label && !seen.has(label)) {
-        seen.add(label);
-        cities.push({ lat, lng, label });
-      }
-    } catch { /* skip */ }
-    if (i < steps - 1) await new Promise(res => setTimeout(res, 300));
+/* ══════════════════════════════════════════════════════════════
+   LONG-DISTANCE CORRIDOR ENGINE
+══════════════════════════════════════════════════════════════ */
+
+// Amtrak corridor stops for California — used when travelMode === "transit"
+// Each corridor has a name, color hint, and ordered station stops
+const AMTRAK_CORRIDORS = [
+  {
+    name: "Coast Starlight / Pacific Surfliner",
+    hint: "LA → SLO → Salinas → San Jose → Oakland",
+    stops: [
+      { label:"Oxnard, California",           lat:34.1975, lng:-119.1771 },
+      { label:"Santa Barbara, California",    lat:34.4208, lng:-119.6982 },
+      { label:"San Luis Obispo, California",  lat:35.2828, lng:-120.6596 },
+      { label:"Salinas, California",          lat:36.6777, lng:-121.6555 },
+      { label:"San Jose, California",         lat:37.3382, lng:-121.8863 },
+      { label:"Oakland, California",          lat:37.8044, lng:-122.2712 },
+    ]
+  },
+  {
+    name: "San Joaquins",
+    hint: "LA → Bakersfield → Fresno → Merced → Stockton → Oakland",
+    stops: [
+      { label:"Bakersfield, California",      lat:35.3733, lng:-119.0187 },
+      { label:"Fresno, California",           lat:36.7378, lng:-119.7871 },
+      { label:"Merced, California",           lat:37.3022, lng:-120.4830 },
+      { label:"Stockton, California",         lat:37.9577, lng:-121.2908 },
+      { label:"Sacramento, California",       lat:38.5816, lng:-121.4944 },
+      { label:"Oakland, California",          lat:37.8044, lng:-122.2712 },
+    ]
+  },
+];
+
+// Decode ORS-encoded polyline (precision 5 by default)
+function decodePolyline(encoded, precision=5) {
+  const coords = [];
+  let index = 0, lat = 0, lng = 0;
+  const factor = Math.pow(10, precision);
+  while (index < encoded.length) {
+    let shift = 0, result = 0, byte;
+    do { byte = encoded.charCodeAt(index++) - 63; result |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20);
+    lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+    shift = 0; result = 0;
+    do { byte = encoded.charCodeAt(index++) - 63; result |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20);
+    lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+    coords.push({ lat: lat / factor, lng: lng / factor });
   }
-  return cities;
+  return coords;
+}
+
+// Fetch ORS Directions between two points, returning up to 3 alternative routes
+async function fetchCorridorRoutes(from, to, profile) {
+  const url = `${ORS_BASE}/v2/directions/${profile}`;
+  const body = {
+    coordinates: [[from.lng, from.lat], [to.lng, to.lat]],
+    alternative_routes: { target_count: 3, weight_factor: 1.4, share_factor: 0.6 },
+    geometry: true,
+    geometry_simplify: false,
+    instructions: false,
+  };
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Authorization": ORS_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`ORS directions HTTP ${r.status}`);
+  const data = await r.json();
+  return data.routes || [];
+}
+
+// Sample N evenly-spaced interior points from a decoded polyline
+function samplePolyline(coords, n) {
+  if (coords.length < 2) return [];
+  // Compute cumulative distances
+  const dists = [0];
+  for (let i = 1; i < coords.length; i++) {
+    dists.push(dists[i-1] + haversineKm(coords[i-1], coords[i]));
+  }
+  const total = dists[dists.length - 1];
+  const pts = [];
+  for (let s = 1; s <= n; s++) {
+    const target = total * (s / (n + 1));
+    // Find segment
+    let j = 1;
+    while (j < dists.length - 1 && dists[j] < target) j++;
+    const seg = dists[j] - dists[j-1];
+    const t = seg > 0 ? (target - dists[j-1]) / seg : 0;
+    pts.push({
+      lat: coords[j-1].lat + (coords[j].lat - coords[j-1].lat) * t,
+      lng: coords[j-1].lng + (coords[j].lng - coords[j-1].lng) * t,
+    });
+  }
+  return pts;
+}
+
+// Reverse-geocode a point to a city name at city zoom level
+async function cityLabel(lat, lng) {
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=10`;
+    const r = await fetch(url);
+    const d = await r.json();
+    const a = d.address || {};
+    const city = a.city || a.town || a.village || a.county || "";
+    const state = a.state || "";
+    return [city, state].filter(Boolean).join(", ") || "Unknown";
+  } catch { return "Unknown"; }
+}
+
+// Route name heuristics based on geometry (very rough)
+function guessRouteName(coords) {
+  // Check if the route goes coastal (westward) or inland (eastward)
+  const midIdx = Math.floor(coords.length / 2);
+  const midLng = coords[midIdx].lng;
+  const startLng = coords[0].lng;
+  const endLng = coords[coords.length - 1].lng;
+  const avgLng = (startLng + endLng) / 2;
+  // Coastal routes stay west (more negative lng in CA)
+  if (midLng < avgLng - 0.3) return "Coastal Route (US-101)";
+  if (midLng > avgLng + 0.3) return "Inland Route (I-5 / CA-99)";
+  return "Direct Route";
+}
+
+async function corridorCities(from, to, activeFriends) {
+  if (STATE.travelMode === "transit") {
+    // Amtrak mode — return static corridor stops filtered to those between endpoints
+    const routes = AMTRAK_CORRIDORS.map(corridor => {
+      const withFairness = corridor.stops.map(stop => {
+        const times = activeFriends.map(f => estimateMins(f.coords, stop, "driving"));
+        return { ...stop, times, fairness: fairnessPct(times), mins: null };
+      });
+      return { name: corridor.name, hint: corridor.hint, cities: withFairness };
+    });
+    return routes;
+  }
+
+  const profile = ORS_PROFILE[STATE.travelMode] || "driving-car";
+  const orsRoutes = await fetchCorridorRoutes(from, to, profile);
+  if (!orsRoutes.length) throw new Error("No routes found between these locations.");
+
+  const corridors = [];
+  const seenRouteNames = new Set();
+
+  for (let ri = 0; ri < orsRoutes.length; ri++) {
+    const route = orsRoutes[ri];
+    const encoded = route.geometry;
+    if (!encoded) continue;
+
+    const coords = decodePolyline(encoded);
+    if (coords.length < 2) continue;
+
+    const name = guessRouteName(coords);
+    if (seenRouteNames.has(name)) continue;
+    seenRouteNames.add(name);
+
+    // Sample 6 interior cities along this route
+    const samples = samplePolyline(coords, 6);
+    const cities = [];
+    const seenCities = new Set();
+
+    for (let si = 0; si < samples.length; si++) {
+      const label = await cityLabel(samples[si].lat, samples[si].lng);
+      if (label === "Unknown" || seenCities.has(label)) {
+        if (si < samples.length - 1) await new Promise(res => setTimeout(res, 200));
+        continue;
+      }
+      seenCities.add(label);
+      const times = activeFriends.map(f => estimateMins(f.coords, samples[si], STATE.travelMode));
+      cities.push({ lat: samples[si].lat, lng: samples[si].lng, label, times, fairness: fairnessPct(times), mins: null });
+      if (si < samples.length - 1) await new Promise(res => setTimeout(res, 250));
+    }
+
+    if (cities.length > 0) {
+      const durationMins = Math.round((route.summary?.duration || 0) / 60);
+      const distanceKm = Math.round((route.summary?.distance || 0) / 1000);
+      corridors.push({ name, cities, durationMins, distanceKm });
+    }
+  }
+
+  if (corridors.length === 0) throw new Error("Could not identify corridor cities. Try again.");
+  return corridors;
 }
 
 async function loadAreas() {
@@ -1727,17 +1883,12 @@ async function loadAreas() {
   render();
 
   if (isLongDistance) {
-    // Corridor city picker — no isochrones
     try {
-      const cities = await corridorCities(farA.coords, farB.coords);
-      if (cities.length === 0) throw new Error("Could not find cities along this corridor.");
-      // Add fairness estimate for each city
-      const withFairness = cities.map(c => {
-        const times = activeFriends.map(f => estimateMins(f.coords, c, STATE.travelMode));
-        const fairness = fairnessPct(times);
-        return { ...c, times, fairness, mins: null };
-      });
-      STATE.candidateAreas = withFairness;
+      const corridors = await corridorCities(farA.coords, farB.coords, activeFriends);
+      STATE.corridorRoutes = corridors;
+      STATE.activeCorridorIdx = 0;
+      // Flatten first corridor into candidateAreas for compatibility
+      STATE.candidateAreas = corridors[0]?.cities || [];
     } catch(e) {
       STATE.areaError = e.message || "Could not find corridor cities.";
     }
@@ -1832,7 +1983,42 @@ function renderAreas() {
   const activeFriends=STATE.friends.filter(f=>f.coords);
 
   if (STATE.longDistance) {
-    // Long-distance: single-select list with h:mm times, miles, and equity ratio
+    const routes = STATE.corridorRoutes;
+
+    // Corridor tabs — one per ORS alternative route
+    if (routes.length > 1) {
+      const tabRow = h("div",{style:"display:flex;gap:6px;margin-bottom:14px;overflow-x:auto;padding-bottom:2px"});
+      routes.forEach((route, ri) => {
+        const isActive = STATE.activeCorridorIdx === ri;
+        const tab = h("button",{style:`flex-shrink:0;padding:7px 13px;border-radius:99px;border:1.5px solid ${isActive?"var(--accent)":"var(--border)"};background:${isActive?"var(--accent-l)":"var(--surface)"};color:${isActive?"var(--accent)":"var(--sub)"};font-size:12px;font-weight:700;white-space:nowrap;transition:all .15s`}, route.name);
+        tab.onclick = () => {
+          STATE.activeCorridorIdx = ri;
+          STATE.candidateAreas = routes[ri].cities;
+          STATE.selectedAreas = [];
+          render();
+        };
+        tabRow.appendChild(tab);
+      });
+      wrap.appendChild(tabRow);
+
+      // Route summary
+      const activeRoute = routes[STATE.activeCorridorIdx];
+      if (activeRoute.durationMins || activeRoute.distanceKm) {
+        const summary = h("div",{style:"color:var(--sub);font-size:12px;margin-bottom:12px"});
+        const parts = [];
+        if (activeRoute.durationMins) parts.push("~" + fmtDuration(activeRoute.durationMins) + " drive");
+        if (activeRoute.distanceKm)   parts.push(fmtMiles(activeRoute.distanceKm));
+        summary.textContent = parts.join(" · ");
+        wrap.appendChild(summary);
+      }
+    } else if (routes.length === 1) {
+      // Single route — show name and summary inline
+      const r = routes[0];
+      wrap.appendChild(h("div",{style:"font-weight:700;font-size:14px;margin-bottom:4px"},r.name));
+      if (r.hint) wrap.appendChild(h("div",{style:"color:var(--sub);font-size:12px;margin-bottom:12px"},r.hint));
+    }
+
+    // City cards — single select
     STATE.candidateAreas.forEach((area,i)=>{
       const isSelected = STATE.selectedAreas.includes(i);
       const card=h("div",{class:`area-card${isSelected?" selected":""}`});
@@ -1840,8 +2026,6 @@ function renderAreas() {
         STATE.selectedAreas = isSelected ? [] : [i];
         render();
       };
-
-      // Equity ratio badge
       const ratio = equityRatio(area.times);
       const header=h("div",{style:"display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"});
       header.append(
@@ -1852,17 +2036,15 @@ function renderAreas() {
         h("div",{style:`background:${isSelected?"var(--accent)":"var(--bg-deep)"};border:2px solid ${isSelected?"var(--accent)":"var(--border)"};border-radius:10px;padding:4px 9px;font-size:12px;font-weight:800;color:${isSelected?"white":"var(--muted)"};flex-shrink:0;transition:all .18s`},ratio)
       );
       card.appendChild(header);
-
-      // Per-friend h:mm + miles chips
-      const times=h("div",{class:"area-times"});
+      const timesRow=h("div",{class:"area-times"});
       activeFriends.forEach((f,fi)=>{
         const mins = area.times[fi];
         const km = haversineKm(f.coords, area);
         const chip=h("div",{class:"area-time-chip",style:`background:${FRIEND_COLORS[fi]}18;border-color:${FRIEND_COLORS[fi]}44;color:${FRIEND_COLORS[fi]}`},
           f.name+": ~"+fmtDuration(mins)+" · "+fmtMiles(km));
-        times.appendChild(chip);
+        timesRow.appendChild(chip);
       });
-      card.appendChild(times);
+      card.appendChild(timesRow);
       wrap.appendChild(card);
     });
     wrap.appendChild(h("div",{style:"color:var(--muted);font-size:11px;text-align:center;margin:10px 0 16px;line-height:1.5"},"Times and distances are straight-line estimates — actual drive times depend on route and traffic."));
@@ -2104,6 +2286,8 @@ function render() {
         STATE.saved = [];
         STATE.venueError = "";
         STATE.longDistance = false;
+        STATE.corridorRoutes = [];
+        STATE.activeCorridorIdx = 0;
         STATE.areaError = "";
         STATE.activeTab = "list";
         STATE.venueFilter = "all";
