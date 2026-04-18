@@ -1734,12 +1734,12 @@ function decodePolyline(encoded, precision=5) {
   return coords;
 }
 
-// Fetch ORS Directions between two points, returning up to 3 alternative routes
+// Fetch ORS Directions between two points — single fastest route
+// (alternative_routes is limited to 100km by ORS public API — unusable for long distance)
 async function fetchCorridorRoutes(from, to, profile) {
   const url = `${ORS_BASE}/v2/directions/${profile}`;
   const body = {
     coordinates: [[from.lng, from.lat], [to.lng, to.lat]],
-    alternative_routes: { target_count: 3, weight_factor: 1.4, share_factor: 0.6 },
     geometry: true,
     geometry_simplify: false,
     instructions: false,
@@ -1808,7 +1808,6 @@ function guessRouteName(coords) {
 
 async function corridorCities(from, to, activeFriends) {
   if (STATE.travelMode === "transit") {
-    // Amtrak mode — return static corridor stops filtered to those between endpoints
     const routes = AMTRAK_CORRIDORS.map(corridor => {
       const withFairness = corridor.stops.map(stop => {
         const times = activeFriends.map(f => estimateMins(f.coords, stop, "driving"));
@@ -1821,48 +1820,49 @@ async function corridorCities(from, to, activeFriends) {
 
   const profile = ORS_PROFILE[STATE.travelMode] || "driving-car";
   const orsRoutes = await fetchCorridorRoutes(from, to, profile);
-  if (!orsRoutes.length) throw new Error("No routes found between these locations.");
+  if (!orsRoutes.length) throw new Error("No route found between these locations.");
 
-  const corridors = [];
-  const seenRouteNames = new Set();
+  const route = orsRoutes[0];
+  const encoded = route.geometry;
+  if (!encoded) throw new Error("No route geometry returned.");
 
-  for (let ri = 0; ri < orsRoutes.length; ri++) {
-    const route = orsRoutes[ri];
-    const encoded = route.geometry;
-    if (!encoded) continue;
+  const coords = decodePolyline(encoded);
+  if (coords.length < 2) throw new Error("Route geometry too short.");
 
-    const coords = decodePolyline(encoded);
-    if (coords.length < 2) continue;
+  const routeName = guessRouteName(coords);
+  const durationMins = Math.round((route.summary?.duration || 0) / 60);
+  const distanceKm   = Math.round((route.summary?.distance || 0) / 1000);
 
-    const name = guessRouteName(coords);
-    if (seenRouteNames.has(name)) continue;
-    seenRouteNames.add(name);
+  // Sample 6 interior cities along the actual road geometry
+  const samples = samplePolyline(coords, 6);
+  const cities = [];
+  const seenCities = new Set();
 
-    // Sample 6 interior cities along this route
-    const samples = samplePolyline(coords, 6);
-    const cities = [];
-    const seenCities = new Set();
-
-    for (let si = 0; si < samples.length; si++) {
-      const label = await cityLabel(samples[si].lat, samples[si].lng);
-      if (label === "Unknown" || seenCities.has(label)) {
-        if (si < samples.length - 1) await new Promise(res => setTimeout(res, 200));
-        continue;
-      }
+  for (let si = 0; si < samples.length; si++) {
+    const label = await cityLabel(samples[si].lat, samples[si].lng);
+    if (label !== "Unknown" && !seenCities.has(label)) {
       seenCities.add(label);
       const times = activeFriends.map(f => estimateMins(f.coords, samples[si], STATE.travelMode));
       cities.push({ lat: samples[si].lat, lng: samples[si].lng, label, times, fairness: fairnessPct(times), mins: null });
-      if (si < samples.length - 1) await new Promise(res => setTimeout(res, 250));
     }
-
-    if (cities.length > 0) {
-      const durationMins = Math.round((route.summary?.duration || 0) / 60);
-      const distanceKm = Math.round((route.summary?.distance || 0) / 1000);
-      corridors.push({ name, cities, durationMins, distanceKm });
-    }
+    if (si < samples.length - 1) await new Promise(res => setTimeout(res, 250));
   }
 
-  if (corridors.length === 0) throw new Error("Could not identify corridor cities. Try again.");
+  if (cities.length === 0) throw new Error("Could not identify cities along this route.");
+
+  const corridors = [{ name: routeName, cities, durationMins, distanceKm, hint: "" }];
+
+  // If ORS took an inland route, offer the coastal Amtrak corridor cities as an alternative and vice versa
+  // This gives users a second corridor option without a second ORS call
+  const isCoastal = routeName.toLowerCase().includes("coastal");
+  const altName   = isCoastal ? "Inland Route (I-5 / CA-99)" : "Coastal Route (US-101)";
+  const altAmtrak = isCoastal ? AMTRAK_CORRIDORS[1] : AMTRAK_CORRIDORS[0];
+  const altCities = altAmtrak.stops.map(stop => {
+    const times = activeFriends.map(f => estimateMins(f.coords, stop, STATE.travelMode));
+    return { ...stop, times, fairness: fairnessPct(times), mins: null };
+  });
+  corridors.push({ name: altName, cities: altCities, durationMins: null, distanceKm: null, hint: altAmtrak.hint });
+
   return corridors;
 }
 
