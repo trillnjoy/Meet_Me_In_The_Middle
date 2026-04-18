@@ -521,13 +521,15 @@ async function findCandidateAreas() {
 
   for (let si = 0; si < timeSteps.length; si++) {
     const mins = timeSteps[si];
-    // Fetch isochrone for each friend in parallel
+    // Fetch isochrone for each friend — individual failures skip this step gracefully
     const isoResults = await Promise.all(
-      activeFriends.map(f => fetchIsochrone(f.coords.lat, f.coords.lng, mins, profile))
+      activeFriends.map(f =>
+        fetchIsochrone(f.coords.lat, f.coords.lng, mins, profile).catch(() => null)
+      )
     );
 
-    // Extract first polygon from each result
-    const polys = isoResults.map(r => r.features?.[0]).filter(Boolean);
+    // Extract first polygon from each result — null means that friend's fetch failed
+    const polys = isoResults.map(r => r ? r.features?.[0] : null).filter(Boolean);
     if (polys.length < activeFriends.length) continue;
 
     // Intersect all polygons
@@ -575,7 +577,7 @@ async function findCandidateAreas() {
   }
 
   if (candidatePoints.length === 0) {
-    throw new Error("Could not find a reachable overlap area. Try increasing travel range or check that locations are driveable.");
+    throw new Error("No reachable overlap found within 75 minutes. The locations may be too far apart for a practical meeting point, or there may be a temporary API issue — try again.");
   }
 
   // Sort by fairness desc, deduplicate by label name then 5km proximity, take top 5
