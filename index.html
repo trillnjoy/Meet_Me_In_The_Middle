@@ -174,6 +174,16 @@ button { cursor: pointer; border: none; background: none; }
 .vibe-btn .vibe-label { font-size: 10px; font-weight: 700; color: var(--sub); white-space: nowrap; }
 .vibe-btn.on .vibe-label { color: var(--accent); }
 
+/* ── Photo crop overlay ── */
+.crop-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.88); z-index: 1000; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.crop-stage { position: relative; width: 280px; height: 280px; }
+.crop-circle-mask { position: absolute; inset: 0; border-radius: 50%; overflow: hidden; border: 3px solid white; box-shadow: 0 0 0 9999px rgba(0,0,0,.6); }
+.crop-img { position: absolute; transform-origin: 0 0; touch-action: none; user-select: none; }
+.crop-btns { display: flex; gap: 12px; margin-top: 22px; }
+.crop-btn { border: none; border-radius: 11px; padding: 12px 28px; font-size: 14px; font-weight: 700; cursor: pointer; }
+.crop-btn.confirm { background: #1A7F5A; color: white; }
+.crop-btn.cancel  { background: rgba(255,255,255,.15); color: white; }
+
 /* ── Settings ── */
 .settings-tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
 .settings-tab { flex: 1; background: transparent; border: none; border-bottom: 2.5px solid transparent; color: var(--sub); padding: 9px 4px; font-size: 13px; font-weight: 700; transition: all .16s; }
@@ -242,7 +252,7 @@ const ORS_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjA4NjhhMjQ
 const ORS_BASE = "https://api.openrouteservice.org";
 const ORS_PROFILE = { driving:"driving-car", transit:"driving-car", walking:"foot-walking", cycling:"cycling-regular" };
 
-const AVATAR_OPTIONS = ["🧑","👩","🧔","👱","👨","👩‍🦱","👩‍🦰","🧑‍🦱","👴","👵","🧑‍🦳","🧑‍🦲","🧒","👧","👦","🧕","🐶","🐱","🦊","🐻","🐼","🦁","🐯","🐨","🌟","🔥","⚡","🌈","🎸","🎯","🚀","💎"];
+const AVATAR_OPTIONS = ["🧑","👩","👨","🧔","👱","🧑‍🦱","👩‍🦱","👨‍🦱","🧑‍🦰","👩‍🦰","👱‍♀️","👱‍♂️","🧑‍🦳","👩‍🦳","👨‍🦳","🧑‍🦲","👩‍🦲","👨‍🦲","👸","🫅","🧕","👴","👵","🧒","👧","👦","🧑🏻","👩🏻‍🦱","👨🏻","👱🏻‍♀️","👨🏼‍🦲","🧔🏻"];
 const COLOR_OPTIONS  = ["#1A7F5A","#2563EB","#9333EA","#E11D48","#EA580C","#CA8A04","#0891B2","#65A30D"];
 
 const CATEGORIES = [
@@ -763,6 +773,99 @@ function renderModal() {
   if (STATE.modal === "venue")    buildVenueModal(sheet, STATE.modalData);
 }
 
+/* ── Photo crop overlay ── */
+function showCropOverlay(dataUrl, onConfirm) {
+  const overlay = h("div",{class:"crop-overlay"});
+  document.body.appendChild(overlay);
+
+  overlay.appendChild(h("div",{style:"color:white;font-size:13px;font-weight:600;margin-bottom:14px;opacity:.8"},"Drag to reposition · Pinch to zoom"));
+
+  const stage = h("div",{class:"crop-stage"});
+  const SIZE = 280;
+
+  const mask = h("div",{class:"crop-circle-mask"});
+  const img = h("img",{class:"crop-img",src:dataUrl,alt:""});
+  mask.appendChild(img);
+  stage.appendChild(mask);
+  overlay.appendChild(stage);
+
+  // State
+  let scale = 1, tx = 0, ty = 0;
+  let imgW = 0, imgH = 0;
+
+  img.onload = () => {
+    imgW = img.naturalWidth; imgH = img.naturalHeight;
+    // Fit image to fill circle initially
+    const fit = Math.max(SIZE / imgW, SIZE / imgH);
+    scale = fit;
+    tx = (SIZE - imgW * scale) / 2;
+    ty = (SIZE - imgH * scale) / 2;
+    applyTransform();
+  };
+
+  function applyTransform() {
+    // Clamp so image always covers the circle
+    const w = imgW * scale, wh = imgH * scale;
+    tx = Math.min(0, Math.max(SIZE - w, tx));
+    ty = Math.min(0, Math.max(SIZE - wh, ty));
+    img.style.width = imgW * scale + "px";
+    img.style.height = imgH * scale + "px";
+    img.style.transform = `translate(${tx}px,${ty}px)`;
+  }
+
+  // Touch handling
+  let lastTouches = null;
+  stage.addEventListener("touchstart", e => { e.preventDefault(); lastTouches = e.touches; }, {passive:false});
+  stage.addEventListener("touchmove", e => {
+    e.preventDefault();
+    const t = e.touches;
+    if (t.length === 1 && lastTouches?.length === 1) {
+      tx += t[0].clientX - lastTouches[0].clientX;
+      ty += t[0].clientY - lastTouches[0].clientY;
+      applyTransform();
+    } else if (t.length === 2 && lastTouches?.length === 2) {
+      const prevDist = Math.hypot(lastTouches[0].clientX-lastTouches[1].clientX, lastTouches[0].clientY-lastTouches[1].clientY);
+      const newDist  = Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY);
+      const ratio = newDist / prevDist;
+      // Scale around pinch midpoint
+      const midX = (t[0].clientX + t[1].clientX) / 2 - stage.getBoundingClientRect().left;
+      const midY = (t[0].clientY + t[1].clientY) / 2 - stage.getBoundingClientRect().top;
+      tx = midX - (midX - tx) * ratio;
+      ty = midY - (midY - ty) * ratio;
+      scale = Math.max(Math.max(SIZE/imgW, SIZE/imgH), scale * ratio);
+      applyTransform();
+    }
+    lastTouches = t;
+  }, {passive:false});
+
+  // Mouse fallback for desktop testing
+  let dragging = false, dragStart = null;
+  stage.addEventListener("mousedown", e => { dragging=true; dragStart={x:e.clientX-tx, y:e.clientY-ty}; });
+  window.addEventListener("mousemove", e => { if(!dragging) return; tx=e.clientX-dragStart.x; ty=e.clientY-dragStart.y; applyTransform(); });
+  window.addEventListener("mouseup", ()=>{ dragging=false; });
+
+  // Buttons
+  const btns = h("div",{class:"crop-btns"});
+  const cancelBtn = h("button",{class:"crop-btn cancel"},"Cancel");
+  const confirmBtn = h("button",{class:"crop-btn confirm"},"Use Photo");
+  cancelBtn.onclick = ()=>overlay.remove();
+  confirmBtn.onclick = ()=>{
+    // Render crop to canvas
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 300;
+    const ctx = canvas.getContext("2d");
+    ctx.beginPath(); ctx.arc(150,150,150,0,Math.PI*2); ctx.clip();
+    // Scale tx/ty from display (280px) to canvas (300px)
+    const ratio = 300 / SIZE;
+    ctx.drawImage(img, tx*ratio, ty*ratio, imgW*scale*ratio, imgH*scale*ratio);
+    const cropped = canvas.toDataURL("image/jpeg", 0.85);
+    overlay.remove();
+    onConfirm(cropped);
+  };
+  btns.append(cancelBtn, confirmBtn);
+  overlay.appendChild(btns);
+}
+
 /* ── Settings modal ── */
 function buildSettingsModal(sheet) {
   const hdr = h("div",{style:"display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"});
@@ -834,18 +937,18 @@ function buildMeTab(wrap) {
   wrap.appendChild(fileRef);
   wrap.appendChild(h("div",{style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px"},"Photo"));
   const photoBtns = h("div",{style:"display:flex;gap:8px;margin-bottom:14px"});
-  const selfieBtn = h("button",{class:"btn-secondary",style:"flex:1;padding:9px"},"📷 Selfie");
   const galleryBtn = h("button",{class:"btn-secondary",style:"flex:1;padding:9px"},"🖼️ Gallery");
-  const clearBtn = h("button",{class:"btn-secondary",style:"flex:1;padding:9px"},"✕ Clear");
-  selfieBtn.onclick = ()=>{ fileRef.setAttribute("capture","user"); fileRef.click(); };
+  const selfieBtn  = h("button",{class:"btn-secondary",style:"flex:1;padding:9px"},"📷 Selfie");
+  const clearBtn   = h("button",{class:"btn-secondary",style:"flex:1;padding:9px"},"✕ Clear");
   galleryBtn.onclick = ()=>{ fileRef.removeAttribute("capture"); fileRef.click(); };
-  clearBtn.onclick = ()=>{ photo=null; refreshPreview(); };
-  photoBtns.append(selfieBtn, galleryBtn, clearBtn);
+  selfieBtn.onclick  = ()=>{ fileRef.setAttribute("capture","user"); fileRef.click(); };
+  clearBtn.onclick   = ()=>{ photo=null; refreshPreview(); };
+  photoBtns.append(galleryBtn, selfieBtn, clearBtn);
   wrap.appendChild(photoBtns);
   fileRef.onchange = e => {
     const file = e.target.files?.[0]; if(!file) return;
     const reader = new FileReader();
-    reader.onload = ev => { photo = ev.target.result; refreshPreview(); };
+    reader.onload = ev => showCropOverlay(ev.target.result, cropped => { photo=cropped; refreshPreview(); });
     reader.readAsDataURL(file);
   };
 
@@ -1031,18 +1134,20 @@ function buildAvatarModal(sheet, {index}) {
   const photoSec = h("div", {style:"margin-bottom:16px"});
   photoSec.appendChild(h("div", {style:"color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px"}, "Photo"));
   const photoBtns = h("div", {style:"display:flex;gap:8px"});
-  const selfieBtn = h("button", {class:"btn-secondary", style:"flex:1;padding:9px"}, "📷 Selfie");
-  const galleryBtn= h("button", {class:"btn-secondary", style:"flex:1;padding:9px"}, "🖼️ Gallery");
-  selfieBtn.onclick  = () => { fileRef.setAttribute("capture","user"); fileRef.click(); };
+  const galleryBtn = h("button", {class:"btn-secondary", style:"flex:1;padding:9px"}, "🖼️ Gallery");
+  const selfieBtn  = h("button", {class:"btn-secondary", style:"flex:1;padding:9px"}, "📷 Selfie");
+  const clearPhotoBtn = h("button", {class:"btn-secondary", style:"flex:1;padding:9px"}, "✕ Clear");
   galleryBtn.onclick = () => { fileRef.removeAttribute("capture"); fileRef.click(); };
-  photoBtns.append(selfieBtn, galleryBtn);
+  selfieBtn.onclick  = () => { fileRef.setAttribute("capture","user"); fileRef.click(); };
+  clearPhotoBtn.onclick = () => { photo=null; refreshPreview(); };
+  photoBtns.append(galleryBtn, selfieBtn, clearPhotoBtn);
   photoSec.appendChild(photoBtns);
   sheet.appendChild(photoSec);
 
   fileRef.addEventListener("change", e => {
     const file = e.target.files?.[0]; if(!file) return;
     const reader = new FileReader();
-    reader.onload = ev => { photo = ev.target.result; refreshPreview(); };
+    reader.onload = ev => showCropOverlay(ev.target.result, cropped => { photo=cropped; refreshPreview(); });
     reader.readAsDataURL(file);
   });
 
