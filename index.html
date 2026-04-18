@@ -184,6 +184,14 @@ button { cursor: pointer; border: none; background: none; }
 .crop-btn.confirm { background: #1A7F5A; color: white; }
 .crop-btn.cancel  { background: rgba(255,255,255,.15); color: white; }
 
+/* ── Corridor refine button ── */
+.refine-btn { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; padding: 5px 0; color: var(--muted); font-size: 11px; font-weight: 700; background: transparent; border: none; cursor: pointer; transition: color .15s; margin: 2px 0; }
+.refine-btn:hover { color: var(--accent); }
+.refine-btn .refine-line { flex: 1; height: 1px; background: var(--border); }
+.refine-btn .refine-circle { width: 22px; height: 22px; border-radius: 11px; border: 1.5px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 13px; flex-shrink: 0; transition: all .15s; }
+.refine-btn:hover .refine-circle { border-color: var(--accent); color: var(--accent); background: var(--accent-l); }
+.refine-btn.loading .refine-circle { border-color: var(--accent); }
+
 /* ── Settings ── */
 .settings-tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
 .settings-tab { flex: 1; background: transparent; border: none; border-bottom: 2.5px solid transparent; color: var(--sub); padding: 9px 4px; font-size: 13px; font-weight: 700; transition: all .16s; }
@@ -1882,10 +1890,76 @@ async function corridorCities(from, to, activeFriends) {
   return corridors;
 }
 
+// Refine corridor: find best city between two existing corridor points using ORS sub-geometry
+async function refineCorridorBetween(cityA, cityB, insertAtIndex) {
+  const activeFriends = STATE.friends.filter(f => f.coords);
+  const profile = ORS_PROFILE[STATE.travelMode] || "driving-car";
+
+  // ORS directions between the two adjacent cities
+  const url = `${ORS_BASE}/v2/directions/${profile}`;
+  const body = {
+    coordinates: [[cityA.lng, cityA.lat], [cityB.lng, cityB.lat]],
+    geometry: true, geometry_simplify: false, instructions: false,
+  };
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Authorization": ORS_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`ORS sub-route HTTP ${r.status}`);
+  const data = await r.json();
+  const route = data.routes?.[0];
+  if (!route?.geometry) throw new Error("No sub-route geometry.");
+
+  const coords = decodePolyline(route.geometry);
+  // Sample 3 interior points, find the one with best commercial density
+  const samples = samplePolyline(coords, 3);
+  let bestCity = null;
+  let bestCount = -1;
+
+  for (let si = 0; si < samples.length; si++) {
+    const pt = samples[si];
+    // Quick commercial probe — single fetch, no delay needed for 3 points
+    try {
+      const deg = (5000 / 111000) * 1.5;
+      const viewbox = [pt.lng-deg, pt.lat-deg, pt.lng+deg, pt.lat+deg].join(",");
+      const pr = await fetch("https://nominatim.openstreetmap.org/search?q=restaurant&format=json&limit=20&addressdetails=0&bounded=1&viewbox=" + viewbox);
+      const pdata = pr.ok ? await pr.json() : [];
+      const count = pdata.length;
+      if (count > bestCount) {
+        bestCount = count;
+        const label = await cityLabel(pt.lat, pt.lng);
+        // Skip if same label as neighbors
+        if (label !== cityA.label && label !== cityB.label && label !== "Unknown") {
+          bestCity = { lat: pt.lat, lng: pt.lng, label, count };
+        }
+      }
+    } catch { /* skip */ }
+    if (si < samples.length - 1) await new Promise(res => setTimeout(res, 300));
+  }
+
+  if (!bestCity) {
+    // Fallback: just use geographic midpoint label
+    const midPt = { lat: (cityA.lat + cityB.lat) / 2, lng: (cityA.lng + cityB.lng) / 2 };
+    const label = await cityLabel(midPt.lat, midPt.lng);
+    bestCity = { ...midPt, label };
+  }
+
+  const times = activeFriends.map(f => estimateMins(f.coords, bestCity, STATE.travelMode));
+  const newEntry = { lat: bestCity.lat, lng: bestCity.lng, label: bestCity.label, times, fairness: fairnessPct(times), mins: null };
+
+  // Insert into candidateAreas and update corridorRoutes cities in sync
+  STATE.candidateAreas.splice(insertAtIndex, 0, newEntry);
+  if (STATE.corridorRoutes[STATE.activeCorridorIdx]) {
+    STATE.corridorRoutes[STATE.activeCorridorIdx].cities = STATE.candidateAreas;
+  }
+  // Adjust selectedAreas indices
+  STATE.selectedAreas = STATE.selectedAreas.map(idx => idx >= insertAtIndex ? idx + 1 : idx);
+}
+
+
 async function loadAreas() {
   const activeFriends = STATE.friends.filter(f => f.coords);
-
-  // Detect long-distance: find farthest pair
   let maxDist = 0, farA = activeFriends[0], farB = activeFriends[1];
   for (let a = 0; a < activeFriends.length; a++) {
     for (let b = a+1; b < activeFriends.length; b++) {
@@ -2034,7 +2108,7 @@ function renderAreas() {
       if (r.hint) wrap.appendChild(h("div",{style:"color:var(--sub);font-size:12px;margin-bottom:12px"},r.hint));
     }
 
-    // City cards — single select
+    // City cards — single select, with + refine buttons between each pair
     STATE.candidateAreas.forEach((area,i)=>{
       const isSelected = STATE.selectedAreas.includes(i);
       const card=h("div",{class:`area-card${isSelected?" selected":""}`});
@@ -2062,6 +2136,34 @@ function renderAreas() {
       });
       card.appendChild(timesRow);
       wrap.appendChild(card);
+
+      // + refine button between this card and the next
+      if (i < STATE.candidateAreas.length - 1) {
+        const refineBtn = h("button",{class:"refine-btn"});
+        refineBtn.append(
+          h("span",{class:"refine-line"}),
+          h("span",{class:"refine-circle"},"+"),
+          h("span",{class:"refine-line"})
+        );
+        const insertIdx = i + 1; // capture for closure
+        refineBtn.onclick = function() {
+          var btn = refineBtn;
+          btn.className = "refine-btn loading";
+          btn.querySelector(".refine-circle").textContent = "⏳";
+          btn.disabled = true;
+          (async function() {
+            try {
+              await refineCorridorBetween(STATE.candidateAreas[insertIdx-1], STATE.candidateAreas[insertIdx], insertIdx);
+              render();
+            } catch(e) {
+              btn.querySelector(".refine-circle").textContent = "✕";
+              btn.title = e.message;
+              setTimeout(function() { btn.querySelector(".refine-circle").textContent = "+"; btn.className="refine-btn"; btn.disabled=false; }, 2000);
+            }
+          })();
+        };
+        wrap.appendChild(refineBtn);
+      }
     });
     wrap.appendChild(h("div",{style:"color:var(--muted);font-size:11px;text-align:center;margin:10px 0 16px;line-height:1.5"},"Times and distances are straight-line estimates — actual drive times depend on route and traffic."));
   } else {
