@@ -467,13 +467,36 @@ async function commercialAnchor(bbox, fallback) {
   try {
     const [minLng, minLat, maxLng, maxLat] = bbox;
     const viewbox = `${minLng},${minLat},${maxLng},${maxLat}`;
-    const url = "https://nominatim.openstreetmap.org/search"
-      + "?q=restaurant&format=json&limit=50&addressdetails=0"
-      + "&bounded=1&viewbox=" + viewbox;
-    const r = await fetch(url);
-    if (!r.ok) return fallback;
-    const data = await r.json();
-    if (!data.length) return fallback;
+
+    // Query multiple venue types in parallel to get full commercial picture
+    const terms = ["restaurant", "bar", "cafe"];
+    const fetches = terms.map(term =>
+      fetch("https://nominatim.openstreetmap.org/search"
+        + "?q=" + encodeURIComponent(term)
+        + "&format=json&limit=50&addressdetails=0"
+        + "&bounded=1&viewbox=" + viewbox)
+      .then(r => r.ok ? r.json() : [])
+      .catch(() => [])
+    );
+    // Stagger requests slightly to avoid rate limiting
+    const results = [];
+    for (let i = 0; i < fetches.length; i++) {
+      if (i > 0) await new Promise(res => setTimeout(res, 250));
+      const data = await fetches[i];
+      for (let j = 0; j < data.length; j++) results.push(data[j]);
+    }
+
+    if (!results.length) return fallback;
+
+    // Deduplicate by place_id
+    const seen = new Set();
+    const unique = [];
+    for (let i = 0; i < results.length; i++) {
+      if (!seen.has(results[i].place_id)) {
+        seen.add(results[i].place_id);
+        unique.push(results[i]);
+      }
+    }
 
     // Grid the bbox into 3x3 cells, count venues per cell
     const cols = 3, rows = 3;
@@ -485,8 +508,8 @@ async function commercialAnchor(bbox, fallback) {
         grid.push({ col, row, count: 0, latSum: 0, lngSum: 0 });
       }
     }
-    for (let i = 0; i < data.length; i++) {
-      const lat = +data[i].lat, lng = +data[i].lon;
+    for (let i = 0; i < unique.length; i++) {
+      const lat = +unique[i].lat, lng = +unique[i].lon;
       const col = Math.min(cols-1, Math.floor((lng - minLng) / cellW));
       const row = Math.min(rows-1, Math.floor((lat - minLat) / cellH));
       const cell = grid[row * cols + col];
@@ -591,9 +614,8 @@ async function findCandidateAreas() {
   const seenLabels = new Set();
   for (let di = 0; di < deduped.length; di++) {
     const pt = deduped[di];
-    // Probe for commercial density within a ~3km box around the isochrone centroid
-    const pad = 0.027; // ~3km in degrees
-    const probeBbox = [pt.lng - pad, pt.lat - pad, pt.lng + pad, pt.lat + pad];
+    // Use the actual isochrone intersection bbox — keeps anchor inside the reachable zone
+    const probeBbox = pt.bbox || [pt.lng-0.027, pt.lat-0.027, pt.lng+0.027, pt.lat+0.027];
     const anchor = await commercialAnchor(probeBbox, pt);
     // Rate limit: small delay between probe calls
     await new Promise(res => setTimeout(res, 300));
