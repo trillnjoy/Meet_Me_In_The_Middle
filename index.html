@@ -461,69 +461,6 @@ async function areaLabel(lat, lng) {
   } catch { return "Area"; }
 }
 
-// Find the densest commercial cluster within a bbox using a Nominatim probe.
-// Returns {lat, lng} of the cluster centroid, or the fallback point if no results.
-async function commercialAnchor(bbox, fallback) {
-  try {
-    const [minLng, minLat, maxLng, maxLat] = bbox;
-    const viewbox = `${minLng},${minLat},${maxLng},${maxLat}`;
-
-    // Query multiple venue types in parallel to get full commercial picture
-    const terms = ["restaurant", "bar", "cafe"];
-    const fetches = terms.map(term =>
-      fetch("https://nominatim.openstreetmap.org/search"
-        + "?q=" + encodeURIComponent(term)
-        + "&format=json&limit=50&addressdetails=0"
-        + "&bounded=1&viewbox=" + viewbox)
-      .then(r => r.ok ? r.json() : [])
-      .catch(() => [])
-    );
-    // Stagger requests slightly to avoid rate limiting
-    const results = [];
-    for (let i = 0; i < fetches.length; i++) {
-      if (i > 0) await new Promise(res => setTimeout(res, 250));
-      const data = await fetches[i];
-      for (let j = 0; j < data.length; j++) results.push(data[j]);
-    }
-
-    if (!results.length) return fallback;
-
-    // Deduplicate by place_id
-    const seen = new Set();
-    const unique = [];
-    for (let i = 0; i < results.length; i++) {
-      if (!seen.has(results[i].place_id)) {
-        seen.add(results[i].place_id);
-        unique.push(results[i]);
-      }
-    }
-
-    // Grid the bbox into 3x3 cells, count venues per cell
-    const cols = 3, rows = 3;
-    const cellW = (maxLng - minLng) / cols;
-    const cellH = (maxLat - minLat) / rows;
-    const grid = [];
-    for (let row = 0; row < rows; row++) {
-      for (let col = 0; col < cols; col++) {
-        grid.push({ col, row, count: 0, latSum: 0, lngSum: 0 });
-      }
-    }
-    for (let i = 0; i < unique.length; i++) {
-      const lat = +unique[i].lat, lng = +unique[i].lon;
-      const col = Math.min(cols-1, Math.floor((lng - minLng) / cellW));
-      const row = Math.min(rows-1, Math.floor((lat - minLat) / cellH));
-      const cell = grid[row * cols + col];
-      cell.count++; cell.latSum += lat; cell.lngSum += lng;
-    }
-
-    // Pick densest cell
-    grid.sort((a, b) => b.count - a.count);
-    const best = grid[0];
-    if (best.count === 0) return fallback;
-    return { lat: best.latSum / best.count, lng: best.lngSum / best.count };
-  } catch { return fallback; }
-}
-
 // Core Phase 1: compute candidate meet areas using isochrone intersections
 // Strategy: step up time intervals until intersections exist; score by fairness
 async function findCandidateAreas() {
@@ -595,41 +532,23 @@ async function findCandidateAreas() {
     throw new Error("Could not find a reachable overlap area. Try increasing travel range or check that locations are driveable.");
   }
 
-  // Sort by fairness desc, take top distinct candidates
+  // Sort by fairness desc, deduplicate by label name then 5km proximity, take top 5
   candidatePoints.sort((a, b) => b.fairness - a.fairness);
-
-  // Deduplicate by 5km proximity first
   const deduped = [];
+  // First pass: reverse-geocode all so we can dedupe by name
+  const allLabels = await Promise.all(candidatePoints.map(p => areaLabel(p.lat, p.lng)));
+  const seenLabels = new Set();
   for (let di = 0; di < candidatePoints.length; di++) {
     const pt = candidatePoints[di];
+    const label = allLabels[di];
     const tooClose = deduped.some(d => haversineKm(d, pt) < 5);
-    if (!tooClose) deduped.push(pt);
+    if (seenLabels.has(label) || tooClose) continue;
+    seenLabels.add(label);
+    deduped.push({ ...pt, label });
     if (deduped.length >= 5) break;
   }
 
-  // For each candidate: find commercial anchor within its isochrone bbox,
-  // then reverse-geocode that anchor for an honest neighborhood name.
-  // Deduplicate by label after anchoring.
-  const results = [];
-  const seenLabels = new Set();
-  for (let di = 0; di < deduped.length; di++) {
-    const pt = deduped[di];
-    // Use the actual isochrone intersection bbox — keeps anchor inside the reachable zone
-    const probeBbox = pt.bbox || [pt.lng-0.027, pt.lat-0.027, pt.lng+0.027, pt.lat+0.027];
-    const anchor = await commercialAnchor(probeBbox, pt);
-    // Rate limit: small delay between probe calls
-    await new Promise(res => setTimeout(res, 300));
-    const label = await areaLabel(anchor.lat, anchor.lng);
-    if (seenLabels.has(label)) continue;
-    seenLabels.add(label);
-    // Recompute times from the commercial anchor point
-    const times = activeFriends.map(f => estimateMins(f.coords, anchor, STATE.travelMode));
-    const mx = Math.max(...times), mn = Math.min(...times);
-    const fairness = mx > 0 ? Math.round((1 - (mx - mn) / mx) * 100) : 100;
-    results.push({ lat: anchor.lat, lng: anchor.lng, times, fairness, mins: pt.mins, label });
-  }
-
-  return results.length > 0 ? results : deduped.map(p => ({ ...p, label: "Area" }));
+  return deduped;
 }
 
 
