@@ -383,6 +383,27 @@ function h(tag, attrs={}, ...children) {
   return el;
 }
 
+function fmtDuration(mins) {
+  if (!mins || mins <= 0) return "—";
+  const h = Math.floor(mins / 60);
+  const m = Math.round(mins % 60);
+  return h > 0 ? `${h}h ${m.toString().padStart(2,"0")}m` : `${m}m`;
+}
+
+function fmtMiles(km) {
+  return Math.round(km * 0.621371) + " mi";
+}
+
+function equityRatio(times) {
+  if (!times || times.length < 2) return "—";
+  const total = times.reduce((a,b)=>a+b,0);
+  if (total === 0) return "—";
+  // Express as two-party ratio from perspective of first two
+  const a = Math.round(times[0]/total*100);
+  const b = 100 - a;
+  return `${a}/${b}`;
+}
+
 function haversineKm(a, b) {
   const R = 6371, dLat = (b.lat-a.lat)*Math.PI/180, dLng = (b.lng-a.lng)*Math.PI/180;
   const x = Math.sin(dLat/2)**2 + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLng/2)**2;
@@ -1672,7 +1693,7 @@ async function corridorCities(from, to) {
     const lng = from.lng + (to.lng - from.lng) * t;
     try {
       // Zoom 8 = city level
-      const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=8`;
+      const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=10`;
       const r = await fetch(url);
       const d = await r.json();
       const a = d.address || {};
@@ -1811,34 +1832,40 @@ function renderAreas() {
   const activeFriends=STATE.friends.filter(f=>f.coords);
 
   if (STATE.longDistance) {
-    // Long-distance: single-select list, no fairness badge, show estimated drive times
+    // Long-distance: single-select list with h:mm times, miles, and equity ratio
     STATE.candidateAreas.forEach((area,i)=>{
       const isSelected = STATE.selectedAreas.includes(i);
       const card=h("div",{class:`area-card${isSelected?" selected":""}`});
       card.onclick=()=>{
-        // Single select for long-distance
         STATE.selectedAreas = isSelected ? [] : [i];
         render();
       };
-      const header=h("div",{style:"display:flex;justify-content:space-between;align-items:center"});
+
+      // Equity ratio badge
+      const ratio = equityRatio(area.times);
+      const header=h("div",{style:"display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"});
       header.append(
         h("div",{},
           h("div",{class:"area-name"},(isSelected?"✓ ":"")+area.label),
           h("div",{class:"area-meta"},"Along your route")
         ),
-        isSelected ? h("div",{style:"width:32px;height:32px;border-radius:16px;background:var(--accent);display:flex;align-items:center;justify-content:center;color:white;font-size:16px;flex-shrink:0"},"✓") : null
+        h("div",{style:`background:${isSelected?"var(--accent)":"var(--bg-deep)"};border:2px solid ${isSelected?"var(--accent)":"var(--border)"};border-radius:10px;padding:4px 9px;font-size:12px;font-weight:800;color:${isSelected?"white":"var(--muted)"};flex-shrink:0;transition:all .18s`},ratio)
       );
       card.appendChild(header);
-      // Drive time chips
+
+      // Per-friend h:mm + miles chips
       const times=h("div",{class:"area-times"});
       activeFriends.forEach((f,fi)=>{
-        const chip=h("div",{class:"area-time-chip",style:`background:${FRIEND_COLORS[fi]}18;border-color:${FRIEND_COLORS[fi]}44;color:${FRIEND_COLORS[fi]}`},f.name+": ~"+area.times[fi]+"min");
+        const mins = area.times[fi];
+        const km = haversineKm(f.coords, area);
+        const chip=h("div",{class:"area-time-chip",style:`background:${FRIEND_COLORS[fi]}18;border-color:${FRIEND_COLORS[fi]}44;color:${FRIEND_COLORS[fi]}`},
+          f.name+": ~"+fmtDuration(mins)+" · "+fmtMiles(km));
         times.appendChild(chip);
       });
       card.appendChild(times);
       wrap.appendChild(card);
     });
-    wrap.appendChild(h("div",{style:"color:var(--muted);font-size:11px;text-align:center;margin:10px 0 16px;line-height:1.5"},"Drive times are estimates — actual times depend on route and traffic."));
+    wrap.appendChild(h("div",{style:"color:var(--muted);font-size:11px;text-align:center;margin:10px 0 16px;line-height:1.5"},"Times and distances are straight-line estimates — actual drive times depend on route and traffic."));
   } else {
     // Normal: multi-select area cards with fairness badge
     STATE.candidateAreas.forEach((area,i)=>{
