@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Overpass CORS Test v2</title>
+<style>
+body { font-family: -apple-system, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background: #F7F6F2; }
+h1 { font-size: 20px; margin-bottom: 4px; }
+p { color: #6B6860; font-size: 13px; margin-bottom: 16px; line-height: 1.5; }
+.result { margin: 8px 0; padding: 10px 14px; border-radius: 10px; font-size: 13px; line-height: 1.5; }
+.pending  { background: #F7F6F2; border: 1px solid #E0DDD5; color: #6B6860; }
+.pass     { background: #E8F5EF; border: 1px solid #1A7F5A; color: #1A7F5A; }
+.fail     { background: #FDEAEA; border: 1px solid #C94040; color: #C94040; }
+.section-label { font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #9B9688; margin: 20px 0 6px; }
+button { background: #1A7F5A; color: white; border: none; border-radius: 10px; padding: 12px 24px; font-size: 14px; font-weight: 700; cursor: pointer; margin-bottom: 20px; width: 100%; }
+.label { font-weight: 700; margin-bottom: 2px; }
+.detail { font-size: 11px; opacity: .8; margin-top: 3px; }
+.summary { margin-top: 16px; padding: 12px 14px; border-radius: 10px; font-size: 13px; font-weight: 700; }
+.summary.good { background: #E8F5EF; color: #1A7F5A; }
+.summary.bad  { background: #FDEAEA; color: #C94040; }
+.summary.partial { background: #FDF3DC; color: #A0721A; }
+</style>
+</head>
+<body>
+
+<h1>Overpass CORS Test v2</h1>
+<p>Tests each mirror using both <strong>POST</strong> (previous test, all failed) and <strong>GET</strong> (new — different WebKit handling). Query: restaurants near Highland Park, LA. Run from GitHub Pages on device for accurate results.</p>
+
+<button onclick="runTests()">Run All Tests</button>
+<div id="results"></div>
+
+<script>
+// Lightweight query — 3 restaurants near Highland Park
+// bbox: south,west,north,east
+const BBOX = "34.09,-118.22,34.12,-118.19";
+const QUERY = `[out:json][timeout:10];node["amenity"="restaurant"](${BBOX});out 3;`;
+
+const MIRRORS = [
+  { name: "overpass-api.de",        url: "https://overpass-api.de/api/interpreter" },
+  { name: "overpass.kumi.systems",  url: "https://overpass.kumi.systems/api/interpreter" },
+  { name: "overpass.private.coffee",url: "https://overpass.private.coffee/api/interpreter" },
+  { name: "maps.mail.ru",           url: "https://maps.mail.ru/osm/tools/overpass/api/interpreter" },
+];
+
+function setResult(id, cls, html) {
+  const el = document.getElementById(id);
+  if (el) { el.className = "result " + cls; el.innerHTML = html; }
+}
+
+async function testPOST(mirror, id) {
+  const start = Date.now();
+  try {
+    const r = await fetch(mirror.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "data=" + encodeURIComponent(QUERY),
+    });
+    const elapsed = Date.now() - start;
+    if (!r.ok) {
+      setResult(id, "fail", `<div class="label">✗ POST · ${mirror.name}</div><div class="detail">HTTP ${r.status} · ${elapsed}ms</div>`);
+      return false;
+    }
+    const data = await r.json();
+    const count = data.elements?.length ?? 0;
+    setResult(id, "pass", `<div class="label">✓ POST · ${mirror.name}</div><div class="detail">CORS OK · ${elapsed}ms · ${count} result${count!==1?"s":""}</div>`);
+    return true;
+  } catch(e) {
+    const elapsed = Date.now() - start;
+    setResult(id, "fail", `<div class="label">✗ POST · ${mirror.name}</div><div class="detail">${e.message||"Network error"} · ${elapsed}ms</div>`);
+    return false;
+  }
+}
+
+async function testGET(mirror, id) {
+  const start = Date.now();
+  // GET: query as URL param — different preflight/CORS handling in some WebKit versions
+  const url = mirror.url + "?data=" + encodeURIComponent(QUERY);
+  try {
+    const r = await fetch(url, {
+      method: "GET",
+      // No custom headers — pure simple GET request, should not trigger preflight
+    });
+    const elapsed = Date.now() - start;
+    if (!r.ok) {
+      setResult(id, "fail", `<div class="label">✗ GET · ${mirror.name}</div><div class="detail">HTTP ${r.status} · ${elapsed}ms</div>`);
+      return false;
+    }
+    const data = await r.json();
+    const count = data.elements?.length ?? 0;
+    setResult(id, "pass", `<div class="label">✓ GET · ${mirror.name}</div><div class="detail">CORS OK · ${elapsed}ms · ${count} result${count!==1?"s":""}</div>`);
+    return true;
+  } catch(e) {
+    const elapsed = Date.now() - start;
+    setResult(id, "fail", `<div class="label">✗ GET · ${mirror.name}</div><div class="detail">${e.message||"Network error"} · ${elapsed}ms</div>`);
+    return false;
+  }
+}
+
+async function runTests() {
+  const container = document.getElementById("results");
+  container.innerHTML = "";
+
+  let postPasses = 0, getPasses = 0;
+
+  // POST section
+  const postLabel = document.createElement("div");
+  postLabel.className = "section-label";
+  postLabel.textContent = "POST requests (previous test — all failed)";
+  container.appendChild(postLabel);
+
+  const postIds = MIRRORS.map((m, i) => {
+    const id = "post-" + i;
+    const div = document.createElement("div");
+    div.id = id;
+    div.className = "result pending";
+    div.innerHTML = `<div class="label">⏳ POST · ${m.name}</div><div class="detail">Testing…</div>`;
+    container.appendChild(div);
+    return id;
+  });
+
+  for (let i = 0; i < MIRRORS.length; i++) {
+    const passed = await testPOST(MIRRORS[i], postIds[i]);
+    if (passed) postPasses++;
+    if (i < MIRRORS.length - 1) await new Promise(r => setTimeout(r, 500));
+  }
+
+  // GET section
+  const getLabel = document.createElement("div");
+  getLabel.className = "section-label";
+  getLabel.textContent = "GET requests (new test — no preflight)";
+  container.appendChild(getLabel);
+
+  const getIds = MIRRORS.map((m, i) => {
+    const id = "get-" + i;
+    const div = document.createElement("div");
+    div.id = id;
+    div.className = "result pending";
+    div.innerHTML = `<div class="label">⏳ GET · ${m.name}</div><div class="detail">Testing…</div>`;
+    container.appendChild(div);
+    return id;
+  });
+
+  for (let i = 0; i < MIRRORS.length; i++) {
+    const passed = await testGET(MIRRORS[i], getIds[i]);
+    if (passed) getPasses++;
+    if (i < MIRRORS.length - 1) await new Promise(r => setTimeout(r, 500));
+  }
+
+  // Summary
+  const totalPasses = postPasses + getPasses;
+  const summary = document.createElement("div");
+  if (getPasses > 0) {
+    summary.className = "summary good";
+    summary.textContent = `GET works on ${getPasses} mirror${getPasses>1?"s":""} — Overpass is viable. Use the fastest passing mirror.`;
+  } else if (postPasses > 0) {
+    summary.className = "summary partial";
+    summary.textContent = `Only POST works (${postPasses} mirror${postPasses>1?"s":""}). Usable but with preflight overhead.`;
+  } else {
+    summary.className = "summary bad";
+    summary.textContent = "All mirrors blocked on both POST and GET. Overpass is not viable from this origin.";
+  }
+  container.appendChild(summary);
+}
+</script>
+</body>
+</html>
