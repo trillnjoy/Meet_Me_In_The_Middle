@@ -561,96 +561,140 @@ async function areaLabel(lat, lng) {
   } catch { return "Area"; }
 }
 
-// Core Phase 1: compute candidate meet areas using isochrone intersections
-// Strategy: step up time intervals until intersections exist; score by fairness
+// Fetch ORS travel-time matrix: all friends → one candidate point
+// Returns array of durations in seconds
+async function orsMatrix(friends, candidate, profile) {
+  const url = `${ORS_BASE}/v2/matrix/${profile}`;
+  const sources = friends.map(f => [f.coords.lng, f.coords.lat]);
+  const dest = [[candidate.lng, candidate.lat]];
+  const body = { locations: [...sources, ...dest], sources: sources.map((_,i)=>i), destinations: [sources.length], metrics: ["duration"] };
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Authorization": ORS_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) return null;
+  const data = await r.json();
+  // durations[i][0] = seconds from friend i to candidate
+  return (data.durations || []).map(row => row[0] ? Math.round(row[0] / 60) : null);
+}
+
+// New findCandidateAreas:
+// 1. True weighted centroid of all friends
+// 2. ORS Matrix to get actual drive times to centroid, adjust if badly unequal
+// 3. Generate 8 cardinal/intercardinal nudges + centroid itself
+// 4. Score all by ORS Matrix fairness
+// 5. Validate each with isochrone membership (traffic chokepoint filter)
+// 6. Reverse-geocode survivors, deduplicate, return up to 8
 async function findCandidateAreas() {
   const activeFriends = STATE.friends.filter(f => f.coords);
   if (activeFriends.length < 2) throw new Error("Need at least 2 locations");
 
   const profile = ORS_PROFILE[STATE.travelMode] || "driving-car";
 
-  // Time steps to try (minutes). Start at 20, step up until intersection found.
-  const timeSteps = [20, 25, 30, 40, 50, 60, 75];
-  let candidatePoints = [];
+  // Step 1: True geographic centroid — equal weight, no road bias
+  const anchor = {
+    lat: activeFriends.reduce((s,f) => s + f.coords.lat, 0) / activeFriends.length,
+    lng: activeFriends.reduce((s,f) => s + f.coords.lng, 0) / activeFriends.length,
+  };
 
-  for (let si = 0; si < timeSteps.length; si++) {
-    const mins = timeSteps[si];
-    // Fetch isochrone for each friend — individual failures skip this step gracefully
+  // Step 2: ORS Matrix to anchor — get actual drive times
+  const anchorTimes = await orsMatrix(activeFriends, anchor, profile);
+
+  // If matrix failed, fall back to haversine estimates
+  const useTimes = anchorTimes && anchorTimes.every(t => t !== null)
+    ? anchorTimes
+    : activeFriends.map(f => estimateMins(f.coords, anchor, STATE.travelMode));
+
+  // Nudge anchor toward whoever has the longest drive (road-network correction)
+  let adjusted = { ...anchor };
+  const maxTime = Math.max(...useTimes);
+  const maxIdx = useTimes.indexOf(maxTime);
+  const minTime = Math.min(...useTimes);
+  if (maxTime - minTime > 8) {
+    // Nudge 30% of the way toward the most disadvantaged friend
+    const outlier = activeFriends[maxIdx].coords;
+    adjusted = {
+      lat: anchor.lat + (outlier.lat - anchor.lat) * 0.3,
+      lng: anchor.lng + (outlier.lng - anchor.lng) * 0.3,
+    };
+  }
+
+  // Step 3: Generate candidates — adjusted anchor + 8 cardinal nudges
+  // Nudge distance: ~1.5km in degrees
+  const nudgeKm = 1.5;
+  const dLat = nudgeKm / 111;
+  const dLng = nudgeKm / (111 * Math.cos(adjusted.lat * Math.PI / 180));
+  const DIRS = [
+    {n:"N",  dl: dLat,  dg: 0    },
+    {n:"NE", dl: dLat,  dg: dLng },
+    {n:"E",  dl: 0,     dg: dLng },
+    {n:"SE", dl:-dLat,  dg: dLng },
+    {n:"S",  dl:-dLat,  dg: 0    },
+    {n:"SW", dl:-dLat,  dg:-dLng },
+    {n:"W",  dl: 0,     dg:-dLng },
+    {n:"NW", dl: dLat,  dg:-dLng },
+  ];
+  const candidates = [adjusted];
+  for (let di = 0; di < DIRS.length; di++) {
+    candidates.push({ lat: adjusted.lat + DIRS[di].dl, lng: adjusted.lng + DIRS[di].dg });
+  }
+
+  // Step 4: Score all candidates via ORS Matrix (batch where possible)
+  // ORS matrix supports many-to-many — score all candidates in parallel calls
+  const scored = [];
+  for (let ci = 0; ci < candidates.length; ci++) {
+    const cand = candidates[ci];
+    const times = await orsMatrix(activeFriends, cand, profile).catch(() => null)
+      || activeFriends.map(f => estimateMins(f.coords, cand, STATE.travelMode));
+    // Filter out nulls
+    const validTimes = times.map(t => t !== null ? t : estimateMins(activeFriends[times.indexOf(t)].coords, cand, STATE.travelMode));
+    scored.push({ lat: cand.lat, lng: cand.lng, times: validTimes, fairness: fairnessPct(validTimes), mins: Math.max(...validTimes) });
+  }
+
+  // Step 5: Isochrone validation — fetch one isochrone per friend at max-time threshold
+  // Use the best candidate's max time as the isochrone range
+  scored.sort((a,b) => b.fairness - a.fairness);
+  const isoMins = Math.min(60, Math.max(20, scored[0].mins + 5));
+
+  let isoPolys = null;
+  try {
     const isoResults = await Promise.all(
-      activeFriends.map(f =>
-        fetchIsochrone(f.coords.lat, f.coords.lng, mins, profile).catch(() => null)
-      )
+      activeFriends.map(f => fetchIsochrone(f.coords.lat, f.coords.lng, isoMins, profile).catch(() => null))
     );
+    const polys = isoResults.map(r => r ? r.features?.[0] : null);
+    if (polys.every(Boolean)) isoPolys = polys;
+  } catch { /* isochrone validation optional */ }
 
-    // Extract first polygon from each result — null means that friend's fetch failed
-    const polys = isoResults.map(r => r ? r.features?.[0] : null).filter(Boolean);
-    if (polys.length < activeFriends.length) continue;
-
-    // Intersect all polygons
-    let intersection = polys[0];
-    for (let i = 1; i < polys.length; i++) {
-      try { intersection = turf.intersect(intersection, polys[i]); }
-      catch { intersection = null; }
-      if (!intersection) break;
+  // Filter candidates to those inside all isochrones (chokepoint filter)
+  const validated = scored.filter(c => {
+    if (!isoPolys) return true; // skip if isochrones failed
+    const pt = turf.point([c.lng, c.lat]);
+    for (let pi = 0; pi < isoPolys.length; pi++) {
+      try { if (!turf.booleanPointInPolygon(pt, isoPolys[pi])) return false; }
+      catch { return true; }
     }
-    if (!intersection) continue;
+    return true;
+  });
 
-    // Sample points within intersection (centroid + up to 4 distributed points)
-    const pts = [];
+  // Use scored list if isochrone filter removed everything
+  const finalList = validated.length >= 2 ? validated : scored;
 
-    // Centroid of intersection
-    const centroid = turf.centroid(intersection);
-    pts.push({ lat: centroid.geometry.coordinates[1], lng: centroid.geometry.coordinates[0] });
-
-    // Additional distributed points via bbox grid
-    const bbox = turf.bbox(intersection);
-    const gridCandidates = [
-      { lat: (bbox[1]*2+bbox[3])/3,   lng: (bbox[0]+bbox[2])/2 },
-      { lat: (bbox[1]+bbox[3]*2)/3,   lng: (bbox[0]+bbox[2])/2 },
-      { lat: (bbox[1]+bbox[3])/2,     lng: (bbox[0]*2+bbox[2])/3 },
-      { lat: (bbox[1]+bbox[3])/2,     lng: (bbox[0]+bbox[2]*2)/3 },
-    ];
-    for (let gi = 0; gi < gridCandidates.length; gi++) {
-      const pt = gridCandidates[gi];
-      const turfPt = turf.point([pt.lng, pt.lat]);
-      if (turf.booleanPointInPolygon(turfPt, intersection)) pts.push(pt);
-    }
-
-    // Score each point by travel-time fairness (using haversine estimate for now)
-    const isoBbox = [bbox[0], bbox[1], bbox[2], bbox[3]]; // [minLng, minLat, maxLng, maxLat]
-    for (let pi = 0; pi < pts.length; pi++) {
-      const pt = pts[pi];
-      const times = activeFriends.map(f => estimateMins(f.coords, pt, STATE.travelMode));
-      const mx = Math.max(...times), mn = Math.min(...times);
-      const fairness = mx > 0 ? Math.round((1 - (mx - mn) / mx) * 100) : 100;
-      candidatePoints.push({ lat: pt.lat, lng: pt.lng, times, fairness, mins, bbox: isoBbox });
-    }
-
-    // If we have enough candidates, stop stepping up
-    if (candidatePoints.length >= 5) break;
-  }
-
-  if (candidatePoints.length === 0) {
-    throw new Error("No reachable overlap found within 75 minutes. The locations may be too far apart for a practical meeting point, or there may be a temporary API issue — try again.");
-  }
-
-  // Sort by fairness desc, deduplicate by label name then 5km proximity, take top 5
-  candidatePoints.sort((a, b) => b.fairness - a.fairness);
-  const deduped = [];
-  // First pass: reverse-geocode all so we can dedupe by name
-  const allLabels = await Promise.all(candidatePoints.map(p => areaLabel(p.lat, p.lng)));
+  // Step 6: Reverse-geocode, deduplicate by label, return up to 8
+  const results = [];
   const seenLabels = new Set();
-  for (let di = 0; di < candidatePoints.length; di++) {
-    const pt = candidatePoints[di];
-    const label = allLabels[di];
-    const tooClose = deduped.some(d => haversineKm(d, pt) < 5);
-    if (seenLabels.has(label) || tooClose) continue;
+  for (let fi = 0; fi < finalList.length; fi++) {
+    const pt = finalList[fi];
+    const label = await areaLabel(pt.lat, pt.lng);
+    if (seenLabels.has(label)) continue;
     seenLabels.add(label);
-    deduped.push({ ...pt, label });
-    if (deduped.length >= 5) break;
+    results.push({ ...pt, label });
+    if (results.length >= 8) break;
+    await new Promise(res => setTimeout(res, 250));
   }
 
-  return deduped;
+  if (results.length === 0) throw new Error("Could not find meeting areas. Check your connection and try again.");
+  return results;
 }
 
 
@@ -2053,10 +2097,8 @@ function renderAreas() {
   if(STATE.candidateAreas.length===0 && !STATE.areaError) {
     const loading=h("div",{style:"display:flex;flex-direction:column;align-items:center;gap:16px;padding:48px 0"});
     loading.appendChild(h("div",{class:"spin",style:"width:48px;height:48px;border-width:3px"}));
-    loading.appendChild(h("div",{style:"font-weight:700;font-size:15px;text-align:center"},
-      STATE.longDistance ? "Finding cities along your route…" : "Calculating fair meeting areas…"));
-    loading.appendChild(h("div",{style:"color:var(--sub);font-size:12px;text-align:center;max-width:220px;line-height:1.6"},
-      STATE.longDistance ? "Sampling points along the corridor and reverse-geocoding to city names" : "Drawing travel-time isochrones from each location and finding where they overlap"));
+    loading.appendChild(h("div",{style:"font-weight:700;font-size:15px;text-align:center"},"Finding fair meeting areas…"));
+    loading.appendChild(h("div",{style:"color:var(--sub);font-size:12px;text-align:center;max-width:220px;line-height:1.6"},"Computing true midpoint, scoring nearby neighborhoods with real drive times"));
     wrap.appendChild(loading);
     return wrap;
   }
@@ -2180,7 +2222,7 @@ function renderAreas() {
       header.append(
         h("div",{},
           h("div",{class:"area-name"}, (isSelected?"✓ ":"")+area.label),
-          h("div",{class:"area-meta"},`Reachable within ~${area.mins} min drive`)
+          h("div",{class:"area-meta"},`~${area.mins} min max drive`)
         ),
         h("div",{style:`width:46px;height:46px;border-radius:23px;background:${isSelected?"var(--accent)":"var(--bg-deep)"};border:2px solid ${isSelected?"var(--accent)":"var(--border)"};display:flex;align-items:center;justify-content:center;font-weight:900;font-size:13px;color:${isSelected?"white":"var(--muted)"};flex-shrink:0;transition:all .18s`},area.fairness+"%")
       );
