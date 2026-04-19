@@ -1533,9 +1533,11 @@ function buildLeafletMap(containerId) {
   const activeFriends = STATE.friends.filter(f=>f.coords);
   const colors = activeFriends.map((_,i)=>FRIEND_COLORS[i]);
 
-  // Midpoint
+  // Meeting area marker — labeled by selected neighborhood name
   const midIcon = L.divIcon({html:`<div style="width:20px;height:20px;border-radius:50%;background:#1A7F5A;border:3px solid white;box-shadow:0 0 14px rgba(26,127,90,.7)"></div>`,iconSize:[20,20],iconAnchor:[10,10],className:""});
-  L.marker([STATE.midpt.lat,STATE.midpt.lng],{icon:midIcon}).addTo(_mapInstance).bindPopup("<b>📍 Midpoint</b>").openPopup();
+  const selectedArea = STATE.candidateAreas[STATE.selectedAreas[0]];
+  const areaMarkerLabel = selectedArea?.label || "Meeting Area";
+  L.marker([STATE.midpt.lat,STATE.midpt.lng],{icon:midIcon}).addTo(_mapInstance).bindPopup(`<b>📍 ${areaMarkerLabel}</b>`).openPopup();
 
   activeFriends.forEach((f,i)=>{
     const col=colors[i];
@@ -2269,12 +2271,14 @@ function renderResults() {
   // Banner
   const cA=activeFriends[0]?.location?.split(",")[0]||"";
   const cB=activeFriends[1]?.location?.split(",")[0]||"";
+  const selectedArea = STATE.candidateAreas[STATE.selectedAreas[0]];
+  const selectedLabel = selectedArea?.label || "";
   const banner=h("div",{class:"banner"});
   const bannerTop=h("div",{style:"display:flex;justify-content:space-between;align-items:flex-start"});
   bannerTop.append(
     h("div",{},
-      h("div",{class:"banner-label"},"Midpoint Found"),
-      h("div",{class:"banner-title"},cA&&cB?`Between ${cA} & ${cB}`:"Your Group Midpoint"),
+      h("div",{class:"banner-label"}, selectedLabel ? "Meeting Area" : "Midpoint Found"),
+      h("div",{class:"banner-title"}, selectedLabel || (cA&&cB?`Between ${cA} & ${cB}`:"Your Group Midpoint")),
       h("div",{style:"color:var(--sub);font-size:12px"},STATE.venues.length+" real venues found nearby")
     ),
     h("div",{style:"text-align:right"},h("div",{style:"color:var(--muted);font-size:10px"},"FRIENDS"),h("div",{style:"font-size:22px;font-weight:900"},activeFriends.length))
