@@ -1946,16 +1946,35 @@ function samplePolyline(coords, n) {
   return pts;
 }
 
-// Reverse-geocode a point to a city name at city zoom level
+// Reverse-geocode a point to the best available city name.
+// Strategy: try zoom 13 (neighbourhood/town precision) first — catches small cities
+// like Paso Robles that may be missed at zoom 12 if the sample lands on the highway
+// outside the incorporated boundary. Fall back to zoom 12 (county level) if zoom 13
+// returns only a county or nothing useful. Prefer city > town > village > municipality
+// at each zoom before falling through to county as last resort.
 async function cityLabel(lat, lng) {
-  try {
-    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=12`;
+  async function resolve(zoom) {
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=${zoom}`;
     const r = await fetch(url);
     const d = await r.json();
     const a = d.address || {};
-    const city = a.city || a.town || a.village || a.municipality || a.county || "";
+    const specific = a.city || a.town || a.village || a.municipality || "";
+    const fallback = a.county || "";
     const state = a.state || "";
-    return [city, state].filter(Boolean).join(", ") || "Unknown";
+    return { specific, fallback, state };
+  }
+  try {
+    // First pass: zoom 13 — gets precise city/town names for small cities
+    const z13 = await resolve(13);
+    if (z13.specific) return [z13.specific, z13.state].filter(Boolean).join(", ");
+    // Second pass: zoom 12 — broader, may surface a city missed at 13
+    await new Promise(res => setTimeout(res, 300));
+    const z12 = await resolve(12);
+    if (z12.specific) return [z12.specific, z12.state].filter(Boolean).join(", ");
+    // Last resort: county name (better than "Unknown" for display)
+    const county = z13.fallback || z12.fallback;
+    const state  = z13.state  || z12.state;
+    return county ? [county, state].filter(Boolean).join(", ") : "Unknown";
   } catch { return "Unknown"; }
 }
 
@@ -2000,8 +2019,8 @@ async function corridorCities(from, to, activeFriends) {
   const durationMins = Math.round((route.summary?.duration || 0) / 60);
   const distanceKm   = Math.round((route.summary?.distance || 0) / 1000);
 
-  // Sample 6 interior cities along the actual road geometry
-  const samples = samplePolyline(coords, 6);
+  // Sample 8 interior cities along the actual road geometry
+  const samples = samplePolyline(coords, 8);
   const cities = [];
   const seenCities = new Set();
 
@@ -2257,14 +2276,36 @@ function renderAreas() {
         STATE.selectedAreas = isSelected ? [] : [i];
         render();
       };
-      const ratio = equityRatio(area.times);
+
+      // Fairness badge: ratio for 2 people, fairness% for 3+
+      const badgeText = activeFriends.length === 2
+        ? equityRatio(area.times)
+        : fairnessPct(area.times) + "%";
+
+      // Maps icons
+      const appleUrl  = `https://maps.apple.com/?ll=${area.lat},${area.lng}&q=${encodeURIComponent(area.label)}&z=12`;
+      const googleUrl = `https://maps.google.com/?q=${area.lat},${area.lng}&z=12`;
+      const lgid = `ag_ld_${i}`;
+      const appleSvg = `<svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="28" height="28" rx="6" fill="#fff"/><rect width="28" height="28" rx="6" fill="url(#${lgid})" opacity=".15"/><defs><linearGradient id="${lgid}" x1="0" y1="0" x2="28" y2="28" gradientUnits="userSpaceOnUse"><stop stop-color="#34C759"/><stop offset="1" stop-color="#30B0C7"/></linearGradient></defs><circle cx="14" cy="14" r="8" fill="none" stroke="#34C759" stroke-width="1.5"/><line x1="14" y1="6" x2="14" y2="9" stroke="#34C759" stroke-width="1.5" stroke-linecap="round"/><line x1="14" y1="19" x2="14" y2="22" stroke="#34C759" stroke-width="1.5" stroke-linecap="round"/><line x1="6" y1="14" x2="9" y2="14" stroke="#34C759" stroke-width="1.5" stroke-linecap="round"/><line x1="19" y1="14" x2="22" y2="14" stroke="#34C759" stroke-width="1.5" stroke-linecap="round"/><circle cx="14" cy="14" r="2" fill="#34C759"/><polygon points="14,8 16.5,13 14,12 11.5,13" fill="#E11D48"/></svg>`;
+      const googleSvg = `<svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="28" height="28" rx="6" fill="#fff"/><path d="M14 6C10.69 6 8 8.69 8 12c0 4.5 6 10 6 10s6-5.5 6-10c0-3.31-2.69-6-6-6z" fill="#EA4335"/><circle cx="14" cy="12" r="2.5" fill="#fff"/></svg>`;
+      const appleBtn = h("a",{href:appleUrl,target:"_blank",rel:"noreferrer",title:"Open in Apple Maps",style:"display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:7px;border:1px solid var(--border);background:var(--surface);box-shadow:0 1px 3px var(--sh);flex-shrink:0;text-decoration:none;"});
+      appleBtn.innerHTML = appleSvg;
+      const googleBtn = h("a",{href:googleUrl,target:"_blank",rel:"noreferrer",title:"Open in Google Maps",style:"display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:7px;border:1px solid var(--border);background:var(--surface);box-shadow:0 1px 3px var(--sh);flex-shrink:0;text-decoration:none;"});
+      googleBtn.innerHTML = googleSvg;
+      [appleBtn, googleBtn].forEach(btn => btn.addEventListener("click", e => e.stopPropagation()));
+      const iconsWrap = h("div",{style:"display:flex;gap:6px;flex-shrink:0"});
+      iconsWrap.append(appleBtn, googleBtn);
+
       const header=h("div",{style:"display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"});
       header.append(
-        h("div",{},
+        h("div",{style:"flex:1;min-width:0"},
           h("div",{class:"area-name"},(isSelected?"✓ ":"")+area.label),
           h("div",{class:"area-meta"},"Along your route")
         ),
-        h("div",{style:`background:${isSelected?"var(--accent)":"var(--bg-deep)"};border:2px solid ${isSelected?"var(--accent)":"var(--border)"};border-radius:10px;padding:4px 9px;font-size:12px;font-weight:800;color:${isSelected?"white":"var(--muted)"};flex-shrink:0;transition:all .18s`},ratio)
+        h("div",{style:"display:flex;align-items:center;gap:8px;flex-shrink:0"},
+          iconsWrap,
+          h("div",{style:`background:${isSelected?"var(--accent)":"var(--bg-deep)"};border:2px solid ${isSelected?"var(--accent)":"var(--border)"};border-radius:10px;padding:4px 9px;font-size:12px;font-weight:800;color:${isSelected?"white":"var(--muted)"};flex-shrink:0;transition:all .18s`},badgeText)
+        )
       );
       card.appendChild(header);
       const timesRow=h("div",{class:"area-times"});
