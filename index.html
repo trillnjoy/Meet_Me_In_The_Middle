@@ -336,10 +336,12 @@ function saveDefaults(d) {
 }
 
 // Build the "Me" friend slot from stored profile (or fallback)
+// Restores last-used location so the Me card is pre-filled on relaunch.
 function meFromProfile() {
   const p = loadProfile();
   return p
-    ? { id:0, name:p.name||"Me", avatar:p.avatar||"🧑", color:p.color||FRIEND_COLORS[0], photo:p.photo||null, location:"", coords:null }
+    ? { id:0, name:p.name||"Me", avatar:p.avatar||"🧑", color:p.color||FRIEND_COLORS[0], photo:p.photo||null,
+        location: p.lastLocation||"", coords: p.lastCoords||null }
     : { id:0, name:"Me", avatar:"🧑", color:FRIEND_COLORS[0], photo:null, location:"", coords:null };
 }
 
@@ -730,6 +732,10 @@ async function findCandidateAreas() {
 // maps.mail.ru returns HTTP 403 — excluded.
 const OVERPASS_PRIMARY  = "https://overpass.private.coffee/api/interpreter";
 const OVERPASS_FALLBACK = "https://overpass-api.de/api/interpreter";
+// ── Branded map icon base64 PNGs (39px @2x, supplied by Troy) ──
+const APPLE_MAPS_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACcAAAAnCAIAAAADwcZiAAABY2lDQ1BrQ0dDb2xvclNwYWNlRGlzcGxheVAzAAAokX2QsUvDUBDGv1aloHUQHRwcMolDlJIKuji0FURxCFXB6pS+pqmQxkeSIgU3/4GC/4EKzm4Whzo6OAiik+jm5KTgouV5L4mkInqP435877vjOCA5bnBu9wOoO75bXMorm6UtJfWMBL0gDObxnK6vSv6uP+P9PvTeTstZv///jcGK6TGqn5QZxl0fSKjE+p7PJe8Tj7m0FHFLshXyieRyyOeBZ71YIL4mVljNqBC/EKvlHt3q4brdYNEOcvu06WysyTmUE1jEDjxw2DDQhAId2T/8s4G/gF1yN+FSn4UafOrJkSInmMTLcMAwA5VYQ4ZSk3eO7ncX3U+NtYMnYKEjhLiItZUOcDZHJ2vH2tQ8MDIEXLW54RqB1EeZrFaB11NguASM3lDPtlfNauH26Tww8CjE2ySQOgS6LSE+joToHlPzA3DpfAEDp2ITpJYOWwAAAARjSUNQDA0AAW4D4+8AAADuZVhJZk1NACoAAAAIAAcBDgACAAAACwAAAGIBEgADAAAAAQABAAABGgAFAAAAAQAAAG4BGwAFAAAAAQAAAHYBKAADAAAAAQACAAABMgACAAAAFAAAAH6HaQAEAAAAAQAAAJIAAAAAU2NyZWVuc2hvdAAAAAAAkAAAAAEAAACQAAAAATIwMjY6MDQ6MTkgMDg6Mzc6NTAAAASQAwACAAAAFAAAAMiShgAHAAAAEgAAANygAgAEAAAAAQAAACegAwAEAAAAAQAAACcAAAAAMjAyNjowNDoxOSAwODozNzo1MABBU0NJSQAAAFNjcmVlbnNob3RJ9tqvAAAACXBIWXMAABYlAAAWJQFJUiTwAAAEr2lUWHRYTUw6Y29tLmFkb2JlLnhtcAAAAAAAPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyIgeDp4bXB0az0iWE1QIENvcmUgNi4wLjAiPgogICA8cmRmOlJERiB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiPgogICAgICA8cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0iIgogICAgICAgICAgICB4bWxuczp0aWZmPSJodHRwOi8vbnMuYWRvYmUuY29tL3RpZmYvMS4wLyIKICAgICAgICAgICAgeG1sbnM6ZXhpZj0iaHR0cDovL25zLmFkb2JlLmNvbS9leGlmLzEuMC8iCiAgICAgICAgICAgIHhtbG5zOnBob3Rvc2hvcD0iaHR0cDovL25zLmFkb2JlLmNvbS9waG90b3Nob3AvMS4wLyIKICAgICAgICAgICAgeG1sbnM6ZGM9Imh0dHA6Ly9wdXJsLm9yZy9kYy9lbGVtZW50cy8xLjEvIgogICAgICAgICAgICB4bWxuczp4bXA9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC8iPgogICAgICAgICA8dGlmZjpZUmVzb2x1dGlvbj4xNDQ8L3RpZmY6WVJlc29sdXRpb24+CiAgICAgICAgIDx0aWZmOlJlc29sdXRpb25Vbml0PjI8L3RpZmY6UmVzb2x1dGlvblVuaXQ+CiAgICAgICAgIDx0aWZmOlhSZXNvbHV0aW9uPjE0NDwvdGlmZjpYUmVzb2x1dGlvbj4KICAgICAgICAgPHRpZmY6T3JpZW50YXRpb24+MTwvdGlmZjpPcmllbnRhdGlvbj4KICAgICAgICAgPGV4aWY6UGl4ZWxYRGltZW5zaW9uPjM5PC9leGlmOlBpeGVsWERpbWVuc2lvbj4KICAgICAgICAgPGV4aWY6VXNlckNvbW1lbnQ+U2NyZWVuc2hvdDwvZXhpZjpVc2VyQ29tbWVudD4KICAgICAgICAgPGV4aWY6UGl4ZWxZRGltZW5zaW9uPjM5PC9leGlmOlBpeGVsWURpbWVuc2lvbj4KICAgICAgICAgPHBob3Rvc2hvcDpEYXRlQ3JlYXRlZD4yMDI2LTA0LTE5VDA4OjM3OjUwPC9waG90b3Nob3A6RGF0ZUNyZWF0ZWQ+CiAgICAgICAgIDxkYzpkZXNjcmlwdGlvbj4KICAgICAgICAgICAgPHJkZjpBbHQ+CiAgICAgICAgICAgICAgIDxyZGY6bGkgeG1sOmxhbmc9IngtZGVmYXVsdCI+U2NyZWVuc2hvdDwvcmRmOmxpPgogICAgICAgICAgICA8L3JkZjpBbHQ+CiAgICAgICAgIDwvZGM6ZGVzY3JpcHRpb24+CiAgICAgICAgIDx4bXA6TW9kaWZ5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";
+const GOOGLE_MAPS_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACcAAAAnCAIAAAADwcZiAAABY2lDQ1BrQ0dDb2xvclNwYWNlRGlzcGxheVAzAAAokX2QsUvDUBDGv1aloHUQHRwcMolDlJIKuji0FURxCFXB6pS+pqmQxkeSIgU3/4GC/4EKzm4Whzo6OAiik+jm5KTgouV5L4mkInqP435877vjOCA5bnBu9wOoO75bXMorm6UtJfWMBL0gDObxnK6vSv6uP+P9PvTeTstZv///jcGK6TGqn5QZxl0fSKjE+p7PJe8Tj7m0FHFLshXyieRyyOeBZ71YIL4mVljNqBC/EKvlHt3q4brdYNEOcvu06WysyTmUE1jEDjxw2DDQhAId2T/8s4G/gF1yN+FSn4UafOrJkSInmMTLcMAwA5VYQ4ZSk3eO7ncX3U+NtYMnYKEjhLiItZUOcDZHJ2vH2tQ8MDIEXLW54RqB1EeZrFaB11NguASM3lDPtlfNauH26Tww8CjE2ySQOgS6LSE+joToHlPzA3DpfAEDp2ITpJYOWwAAAARjSUNQDA0AAW4D4+8AAADuZVhJZk1NACoAAAAIAAcBDgACAAAACwAAAGIBEgADAAAAAQABAAABGgAFAAAAAQAAAG4BGwAFAAAAAQAAAHYBKAADAAAAAQACAAABMgACAAAAFAAAAH6HaQAEAAAAAQAAAJIAAAAAU2NyZWVuc2hvdAAAAAAAkAAAAAEAAACQAAAAATIwMjY6MDQ6MTkgMDg6Mzk6MDMAAASQAwACAAAAFAAAAMiShgAHAAAAEgAAANygAgAEAAAAAQAAACegAwAEAAAAAQAAACcAAAAAMjAyNjowNDoxOSAwODozOTowMwBBU0NJSQAAAFNjcmVlbnNob3TzWXcCAAAACXBIWXMAABYlAAAWJQFJUiTwAAAEr2lUWHRYTUw6Y29tLmFkb2JlLnhtcAAAAAAAPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyIgeDp4bXB0az0iWE1QIENvcmUgNi4wLjAiPgogICA8cmRmOlJERiB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiPgogICAgICA8cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0iIgogICAgICAgICAgICB4bWxuczp0aWZmPSJodHRwOi8vbnMuYWRvYmUuY29tL3RpZmYvMS4wLyIKICAgICAgICAgICAgeG1sbnM6ZXhpZj0iaHR0cDovL25zLmFkb2JlLmNvbS9leGlmLzEuMC8iCiAgICAgICAgICAgIHhtbG5zOnBob3Rvc2hvcD0iaHR0cDovL25zLmFkb2JlLmNvbS9waG90b3Nob3AvMS4wLyIKICAgICAgICAgICAgeG1sbnM6ZGM9Imh0dHA6Ly9wdXJsLm9yZy9kYy9lbGVtZW50cy8xLjEvIgogICAgICAgICAgICB4bWxuczp4bXA9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC8iPgogICAgICAgICA8dGlmZjpZUmVzb2x1dGlvbj4xNDQ8L3RpZmY6WVJlc29sdXRpb24+CiAgICAgICAgIDx0aWZmOlJlc29sdXRpb25Vbml0PjI8L3RpZmY6UmVzb2x1dGlvblVuaXQ+CiAgICAgICAgIDx0aWZmOlhSZXNvbHV0aW9uPjE0NDwvdGlmZjpYUmVzb2x1dGlvbj4KICAgICAgICAgPHRpZmY6T3JpZW50YXRpb24+MTwvdGlmZjpPcmllbnRhdGlvbj4KICAgICAgICAgPGV4aWY6UGl4ZWxYRGltZW5zaW9uPjM5PC9leGlmOlBpeGVsWERpbWVuc2lvbj4KICAgICAgICAgPGV4aWY6VXNlckNvbW1lbnQ+U2NyZWVuc2hvdDwvZXhpZjpVc2VyQ29tbWVudD4KICAgICAgICAgPGV4aWY6UGl4ZWxZRGltZW5zaW9uPjM5PC9leGlmOlBpeGVsWURpbWVuc2lvbj4KICAgICAgICAgPHBob3Rvc2hvcDpEYXRlQ3JlYXRlZD4yMDI2LTA0LTE5VDA4OjM5OjAzPC9waG90b3Nob3A6RGF0ZUNyZWF0ZWQ+CiAgICAgICAgIDxkYzpkZXNjcmlwdGlvbj4KICAgICAgICAgICAgPHJkZjpBbHQ+CiAgICAgICAgICAgICAgIDxyZGY6bGkgeG1sOmxhbmc9IngtZGVmYXVsdCI+U2NyZWVuc2hvdDwvcmRmOmxpPgogICAgICAgICAgICA8L3JkZjpBbHQ+CiAgICAgICAgIDwvZGM6ZGVzY3JpcHRpb24+CiAgICAgICAgIDx4bXA6TW9kaWZ5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";
+
 
 // OSM tag clauses per category — each entry is an array of Overpass filter strings.
 // nwr = node + way + relation; "out center" returns centroid for area elements.
@@ -747,6 +753,16 @@ const OVERPASS_TAGS = {
   winery:     [`["craft"="winery"]`, `["amenity"="bar"]["drink:wine"="yes"]`, `["shop"="wine"]`],
   brewery:    [`["craft"="brewery"]`, `["craft"="microbrewery"]`, `["amenity"="bar"]["microbrewery"="yes"]`, `["amenity"="pub"]["microbrewery"="yes"]`],
 };
+
+
+// Build a branded map icon link button — 32x32, no border/bg, just the icon
+function mapIconBtn(url, iconDataUrl, title) {
+  const btn = h("a",{href:url,target:"_blank",rel:"noreferrer",title,style:"display:flex;align-items:center;justify-content:center;width:32px;height:32px;text-decoration:none;flex-shrink:0;"});
+  const img = h("img",{src:iconDataUrl,alt:title,style:"width:32px;height:32px;border-radius:7px;"});
+  btn.appendChild(img);
+  btn.addEventListener("click", e => e.stopPropagation());
+  return btn;
+}
 
 // Run an Overpass QL query string against the primary mirror with fallback.
 async function overpassQuery(ql) {
@@ -1461,6 +1477,11 @@ function buildLocationModal(sheet, {index}) {
       ? {...f, name:newName, location:chosen.label, coords:{lat:chosen.lat, lng:chosen.lng}}
       : {...f, name:newName};
     STATE.friends[index] = updatedFriend;
+    // Persist Me location to profile so it survives app restarts
+    if (index === 0) {
+      const existing = loadProfile() || {};
+      saveProfile({ ...existing, name:newName, lastLocation: updatedFriend.location||null, lastCoords: updatedFriend.coords||null });
+    }
     closeModal();
     render();
   };
@@ -2285,29 +2306,24 @@ function renderAreas() {
         ? equityRatio(area.times)
         : fairnessPct(area.times) + "%";
 
-      // Maps icons
+      // Maps icons — vertical stack, right of badge
       const appleUrl  = `https://maps.apple.com/?ll=${area.lat},${area.lng}&q=${encodeURIComponent(area.label)}&z=12`;
       const googleUrl = `https://maps.google.com/?q=${area.lat},${area.lng}&z=12`;
-      const lgid = `ag_ld_${i}`;
-      const appleSvg = `<svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="28" height="28" rx="6" fill="#fff"/><rect width="28" height="28" rx="6" fill="url(#${lgid})" opacity=".15"/><defs><linearGradient id="${lgid}" x1="0" y1="0" x2="28" y2="28" gradientUnits="userSpaceOnUse"><stop stop-color="#34C759"/><stop offset="1" stop-color="#30B0C7"/></linearGradient></defs><circle cx="14" cy="14" r="8" fill="none" stroke="#34C759" stroke-width="1.5"/><line x1="14" y1="6" x2="14" y2="9" stroke="#34C759" stroke-width="1.5" stroke-linecap="round"/><line x1="14" y1="19" x2="14" y2="22" stroke="#34C759" stroke-width="1.5" stroke-linecap="round"/><line x1="6" y1="14" x2="9" y2="14" stroke="#34C759" stroke-width="1.5" stroke-linecap="round"/><line x1="19" y1="14" x2="22" y2="14" stroke="#34C759" stroke-width="1.5" stroke-linecap="round"/><circle cx="14" cy="14" r="2" fill="#34C759"/><polygon points="14,8 16.5,13 14,12 11.5,13" fill="#E11D48"/></svg>`;
-      const googleSvg = `<svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="28" height="28" rx="6" fill="#fff"/><path d="M14 6C10.69 6 8 8.69 8 12c0 4.5 6 10 6 10s6-5.5 6-10c0-3.31-2.69-6-6-6z" fill="#EA4335"/><circle cx="14" cy="12" r="2.5" fill="#fff"/></svg>`;
-      const appleBtn = h("a",{href:appleUrl,target:"_blank",rel:"noreferrer",title:"Open in Apple Maps",style:"display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:7px;border:1px solid var(--border);background:var(--surface);box-shadow:0 1px 3px var(--sh);flex-shrink:0;text-decoration:none;"});
-      appleBtn.innerHTML = appleSvg;
-      const googleBtn = h("a",{href:googleUrl,target:"_blank",rel:"noreferrer",title:"Open in Google Maps",style:"display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:7px;border:1px solid var(--border);background:var(--surface);box-shadow:0 1px 3px var(--sh);flex-shrink:0;text-decoration:none;"});
-      googleBtn.innerHTML = googleSvg;
-      [appleBtn, googleBtn].forEach(btn => btn.addEventListener("click", e => e.stopPropagation()));
-      const iconsWrap = h("div",{style:"display:flex;gap:6px;flex-shrink:0"});
-      iconsWrap.append(appleBtn, googleBtn);
+      const ldIconsCol = h("div",{style:"display:flex;flex-direction:column;gap:4px;flex-shrink:0"});
+      ldIconsCol.append(
+        mapIconBtn(appleUrl,  APPLE_MAPS_ICON,  "Open in Apple Maps"),
+        mapIconBtn(googleUrl, GOOGLE_MAPS_ICON, "Open in Google Maps")
+      );
 
-      const header=h("div",{style:"display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"});
+      const header=h("div",{style:"display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px"});
       header.append(
         h("div",{style:"flex:1;min-width:0"},
           h("div",{class:"area-name"},(isSelected?"✓ ":"")+area.label),
           h("div",{class:"area-meta"},"Along your route")
         ),
-        h("div",{style:"display:flex;align-items:center;gap:8px;flex-shrink:0"},
-          iconsWrap,
-          h("div",{style:`background:${isSelected?"var(--accent)":"var(--bg-deep)"};border:2px solid ${isSelected?"var(--accent)":"var(--border)"};border-radius:10px;padding:4px 9px;font-size:12px;font-weight:800;color:${isSelected?"white":"var(--muted)"};flex-shrink:0;transition:all .18s`},badgeText)
+        h("div",{style:"display:flex;flex-direction:row;align-items:flex-start;gap:6px;flex-shrink:0"},
+          ldIconsCol,
+          h("div",{style:`background:${isSelected?"var(--accent)":"var(--bg-deep)"};border:2px solid ${isSelected?"var(--accent)":"var(--border)"};border-radius:10px;padding:4px 9px;font-size:12px;font-weight:800;color:${isSelected?"white":"var(--muted)"};flex-shrink:0;transition:all .18s;align-self:flex-start`},badgeText)
         )
       );
       card.appendChild(header);
@@ -2368,25 +2384,23 @@ function renderAreas() {
       const header=h("div",{style:"display:flex;justify-content:space-between;align-items:flex-start"});
       const appleUrl  = `https://maps.apple.com/?ll=${area.lat},${area.lng}&q=${encodeURIComponent(area.label)}&z=15`;
       const googleUrl = `https://maps.google.com/?q=${area.lat},${area.lng}&z=15`;
-      const gid = `ag${i}`;
-      const appleSvg = `<svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="28" height="28" rx="6" fill="#fff"/><rect width="28" height="28" rx="6" fill="url(#${gid})" opacity=".15"/><defs><linearGradient id="${gid}" x1="0" y1="0" x2="28" y2="28" gradientUnits="userSpaceOnUse"><stop stop-color="#34C759"/><stop offset="1" stop-color="#30B0C7"/></linearGradient></defs><circle cx="14" cy="14" r="8" fill="none" stroke="#34C759" stroke-width="1.5"/><line x1="14" y1="6" x2="14" y2="9" stroke="#34C759" stroke-width="1.5" stroke-linecap="round"/><line x1="14" y1="19" x2="14" y2="22" stroke="#34C759" stroke-width="1.5" stroke-linecap="round"/><line x1="6" y1="14" x2="9" y2="14" stroke="#34C759" stroke-width="1.5" stroke-linecap="round"/><line x1="19" y1="14" x2="22" y2="14" stroke="#34C759" stroke-width="1.5" stroke-linecap="round"/><circle cx="14" cy="14" r="2" fill="#34C759"/><polygon points="14,8 16.5,13 14,12 11.5,13" fill="#E11D48"/></svg>`;
-      const googleSvg = `<svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="28" height="28" rx="6" fill="#fff"/><path d="M14 6C10.69 6 8 8.69 8 12c0 4.5 6 10 6 10s6-5.5 6-10c0-3.31-2.69-6-6-6z" fill="#EA4335"/><circle cx="14" cy="12" r="2.5" fill="#fff"/></svg>`;
-      const appleBtn = h("a",{href:appleUrl,target:"_blank",rel:"noreferrer",title:"Open in Apple Maps",style:"display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:7px;border:1px solid var(--border);background:var(--surface);box-shadow:0 1px 3px var(--sh);flex-shrink:0;text-decoration:none;"});
-      appleBtn.innerHTML = appleSvg;
-      const googleBtn = h("a",{href:googleUrl,target:"_blank",rel:"noreferrer",title:"Open in Google Maps",style:"display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:7px;border:1px solid var(--border);background:var(--surface);box-shadow:0 1px 3px var(--sh);flex-shrink:0;text-decoration:none;"});
-      googleBtn.innerHTML = googleSvg;
-      [appleBtn, googleBtn].forEach(btn => btn.addEventListener("click", e => e.stopPropagation()));
-      const iconsWrap = h("div",{style:"display:flex;gap:6px;flex-shrink:0;margin-left:8px"});
-      iconsWrap.append(appleBtn, googleBtn);
+      // Icons vertically stacked to the right of the fairness circle
+      const rightCol = h("div",{style:"display:flex;flex-direction:row;align-items:flex-start;gap:6px;flex-shrink:0"});
+      const iconsCol = h("div",{style:"display:flex;flex-direction:column;gap:4px;flex-shrink:0"});
+      iconsCol.append(
+        mapIconBtn(appleUrl,  APPLE_MAPS_ICON,  "Open in Apple Maps"),
+        mapIconBtn(googleUrl, GOOGLE_MAPS_ICON, "Open in Google Maps")
+      );
+      rightCol.append(
+        iconsCol,
+        h("div",{style:`width:46px;height:46px;border-radius:23px;background:${isSelected?"var(--accent)":"var(--bg-deep)"};border:2px solid ${isSelected?"var(--accent)":"var(--border)"};display:flex;align-items:center;justify-content:center;font-weight:900;font-size:13px;color:${isSelected?"white":"var(--muted)"};flex-shrink:0;transition:all .18s`},area.fairness+"%")
+      );
       header.append(
-        h("div",{},
+        h("div",{style:"flex:1;min-width:0"},
           h("div",{class:"area-name"}, (isSelected?"✓ ":"")+area.label),
           h("div",{class:"area-meta"},`~${area.mins} min max drive`)
         ),
-        h("div",{style:"display:flex;align-items:center;gap:8px;flex-shrink:0"},
-          iconsWrap,
-          h("div",{style:`width:46px;height:46px;border-radius:23px;background:${isSelected?"var(--accent)":"var(--bg-deep)"};border:2px solid ${isSelected?"var(--accent)":"var(--border)"};display:flex;align-items:center;justify-content:center;font-weight:900;font-size:13px;color:${isSelected?"white":"var(--muted)"};flex-shrink:0;transition:all .18s`},area.fairness+"%")
-        )
+        rightCol
       );
       card.appendChild(header);
       const times=h("div",{class:"area-times"});
