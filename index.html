@@ -274,7 +274,8 @@ const CATEGORIES = [
   { id:"park",       icon:"🌳", label:"Parks & Outdoors",  osm:"leisure=park" },
   { id:"cinema",     icon:"🎬", label:"Cinema",            osm:"amenity=cinema" },
   { id:"nightclub",  icon:"🎶", label:"Live Music & Clubs",osm:"amenity=nightclub" },
-  { id:"winery",     icon:"🍷", label:"Wineries & Tasting",osm:"amenity=bar" },
+  { id:"winery",     icon:"🍷", label:"Wineries & Tasting",osm:"craft=winery" },
+  { id:"brewery",    icon:"🍺", label:"Breweries & BrewPubs",osm:"craft=brewery" },
 ];
 
 const VIBES = [
@@ -697,12 +698,11 @@ async function findCandidateAreas() {
   if (results.length === 0) throw new Error("Could not find meeting areas. Check your connection and try again.");
 
   // Step 7: Thin venue suppression — probe each candidate for commercial density.
-  // A single "restaurant" query is the fastest reliable OSM density signal.
-  // Primary area (index 0, highest fairness) is always kept regardless of count.
-  // Any subsequent candidate returning fewer than 5 restaurant results is flagged thin.
+  // Single Nominatim restaurant count per candidate; primary (index 0) always kept.
+  // Candidates with fewer than 5 results flagged thin and silently dropped in renderAreas.
   const THIN_THRESHOLD = 5;
   for (let ri = 0; ri < results.length; ri++) {
-    if (ri === 0) { results[ri].thin = false; continue; } // always keep primary
+    if (ri === 0) { results[ri].thin = false; continue; }
     try {
       await new Promise(res => setTimeout(res, 300));
       const pt = results[ri];
@@ -714,7 +714,7 @@ async function findCandidateAreas() {
       const data = r.ok ? await r.json() : [];
       results[ri].thin = data.length < THIN_THRESHOLD;
     } catch {
-      results[ri].thin = false; // on network error, don't suppress
+      results[ri].thin = false;
     }
   }
 
@@ -722,79 +722,143 @@ async function findCandidateAreas() {
 }
 
 
-async function fetchVenues(lat, lng, catIds) {
-  // Nominatim free-text search bounded to a viewbox around the midpoint.
-  // ?q= is the only reliably supported search parameter across all result types.
-  // amenity=/leisure= as standalone params return 400 — confirmed in production.
-  // Use a 2.5km radius — large enough to reach the nearest commercial corridor
-  // from a residential midpoint, small enough to stay in the right neighborhood.
-  const radiusM = STATE._lastRadiusM || 2500;
-  const deg = (radiusM / 111000) * 1.5;
-  const viewbox = [lng-deg, lat-deg, lng+deg, lat+deg].join(",");
-  const SEARCH_TERMS = {
-    restaurant: ["restaurant"],
-    bar:        ["bar"],
-    cafe:       ["cafe"],
-    golf:       ["golf course"],
-    spa:        ["spa", "massage"],
-    museum:     ["museum"],
-    theatre:    ["theatre"],
-    park:       ["park"],
-    cinema:     ["cinema"],
-    nightclub:  ["nightclub"],
-    winery:     ["winery", "wine bar", "tasting room"],
-  };
+// ── Overpass mirrors (in priority order) ──────────────────────
+// Confirmed working via POST from GitHub Pages / Safari iOS (tested 2026-04-19).
+// overpass.private.coffee is fastest (~726ms GET, ~1589ms POST).
+// overpass-api.de is canonical fallback (~1423ms POST).
+// kumi.systems is too slow (5-12s) — not used.
+// maps.mail.ru returns HTTP 403 — excluded.
+const OVERPASS_PRIMARY  = "https://overpass.private.coffee/api/interpreter";
+const OVERPASS_FALLBACK = "https://overpass-api.de/api/interpreter";
 
+// OSM tag clauses per category — each entry is an array of Overpass filter strings.
+// nwr = node + way + relation; "out center" returns centroid for area elements.
+const OVERPASS_TAGS = {
+  restaurant: [`["amenity"="restaurant"]`],
+  bar:        [`["amenity"="bar"]`],
+  cafe:       [`["amenity"="cafe"]`],
+  golf:       [`["leisure"="golf_course"]`],
+  spa:        [`["leisure"="spa"]`, `["shop"="massage"]`],
+  museum:     [`["tourism"="museum"]`],
+  theatre:    [`["amenity"="theatre"]`],
+  park:       [`["leisure"="park"]`],
+  cinema:     [`["amenity"="cinema"]`],
+  nightclub:  [`["amenity"="nightclub"]`],
+  winery:     [`["craft"="winery"]`, `["amenity"="bar"]["drink:wine"="yes"]`, `["shop"="wine"]`],
+  brewery:    [`["craft"="brewery"]`, `["craft"="microbrewery"]`, `["amenity"="bar"]["microbrewery"="yes"]`, `["amenity"="pub"]["microbrewery"="yes"]`],
+};
+
+// Run an Overpass QL query string against the primary mirror with fallback.
+async function overpassQuery(ql) {
+  const body = "data=" + encodeURIComponent(ql);
+  const headers = { "Content-Type": "application/x-www-form-urlencoded" };
+
+  // Try primary
+  try {
+    const r = await fetch(OVERPASS_PRIMARY, { method:"POST", headers, body });
+    if (r.ok) return await r.json();
+    console.warn("Overpass primary HTTP", r.status, "— trying fallback");
+  } catch(e) {
+    console.warn("Overpass primary failed:", e.message, "— trying fallback");
+  }
+
+  // Fallback
+  const r2 = await fetch(OVERPASS_FALLBACK, { method:"POST", headers, body });
+  if (!r2.ok) throw new Error("Overpass HTTP " + r2.status);
+  return await r2.json();
+}
+
+async function fetchVenues(lat, lng, catIds) {
+  // Build a single Overpass query covering all selected categories.
+  // One network round-trip replaces the sequential Nominatim loop.
+  // "out center" returns polygon centroids so we always get lat/lng.
+  const radiusM = STATE._lastRadiusM || 2500;
+
+  // Build union clauses: one nwr block per tag filter per category
+  const clauses = [];
+  for (const id of catIds) {
+    const tags = OVERPASS_TAGS[id];
+    if (!tags) continue;
+    for (const tag of tags) {
+      clauses.push(`  nwr${tag}(around:${radiusM},${lat},${lng});`);
+    }
+  }
+
+  if (clauses.length === 0) return [];
+
+  const ql = `[out:json][timeout:20];\n(\n${clauses.join("\n")}\n);\nout center 60;`;
+
+  let data;
+  try {
+    data = await overpassQuery(ql);
+  } catch(e) {
+    console.warn("Overpass venue fetch failed:", e.message);
+    return [];
+  }
+
+  const elements = data.elements || [];
   const results = [];
   const seen = new Set();
 
-  for (let ci = 0; ci < catIds.length; ci++) {
-    const id    = catIds[ci];
-    const terms = SEARCH_TERMS[id];
-    const cat   = CATEGORIES.find(c=>c.id===id);
-    if (!terms || !cat) continue;
+  for (const el of elements) {
+    // Resolve coordinates — nodes have lat/lon directly; ways/relations have center
+    const elLat = el.lat ?? el.center?.lat;
+    const elLng = el.lon ?? el.center?.lon;
+    if (!elLat || !elLng) continue;
 
-    for (let ti = 0; ti < terms.length; ti++) {
-      const term = terms[ti];
-      if (ti > 0) await new Promise(res => setTimeout(res, 350));
-      try {
-        const url = "https://nominatim.openstreetmap.org/search"
-          + "?q=" + encodeURIComponent(term)
-          + "&format=json&limit=20&addressdetails=1"
-          + "&bounded=1&viewbox=" + viewbox;
+    const tags = el.tags || {};
+    const name = tags.name;
+    if (!name) continue; // skip unnamed features
 
-        const r = await fetch(url);
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        const data = await r.json();
+    const osmId = el.type + el.id;
+    if (seen.has(osmId)) continue;
+    seen.add(osmId);
 
-        for (let di = 0; di < data.length; di++) {
-          const d = data[di];
-          if (!d.lat || !d.lon) continue;
-        if (seen.has(d.place_id)) continue;
-        seen.add(d.place_id);
+    // Match to user's selected category — first tag match wins
+    let matchedCat = null;
+    for (const id of catIds) {
+      const osmTags = OVERPASS_TAGS[id];
+      if (!osmTags) continue;
+      // Quick heuristic match against the element's OSM tags
+      if (id === "restaurant" && tags.amenity === "restaurant") { matchedCat = id; break; }
+      if (id === "bar"        && tags.amenity === "bar")        { matchedCat = id; break; }
+      if (id === "cafe"       && tags.amenity === "cafe")       { matchedCat = id; break; }
+      if (id === "golf"       && tags.leisure === "golf_course"){ matchedCat = id; break; }
+      if (id === "spa"        && (tags.leisure === "spa" || tags.shop === "massage")) { matchedCat = id; break; }
+      if (id === "museum"     && tags.tourism === "museum")     { matchedCat = id; break; }
+      if (id === "theatre"    && tags.amenity === "theatre")    { matchedCat = id; break; }
+      if (id === "park"       && tags.leisure === "park")       { matchedCat = id; break; }
+      if (id === "cinema"     && tags.amenity === "cinema")     { matchedCat = id; break; }
+      if (id === "nightclub"  && tags.amenity === "nightclub")  { matchedCat = id; break; }
+      if (id === "winery"     && (tags.craft === "winery" || tags.shop === "wine" || (tags.amenity === "bar" && tags["drink:wine"] === "yes"))) { matchedCat = id; break; }
+      if (id === "brewery"    && (tags.craft === "brewery" || tags.craft === "microbrewery" || (tags.microbrewery === "yes"))) { matchedCat = id; break; }
+    }
+    if (!matchedCat) continue;
 
-        const a    = d.address || {};
-        const name = a.amenity || a.leisure || a.tourism || a.shop
-                  || d.display_name.split(",")[0].trim();
-        if (!name) continue;
+    const cat = CATEGORIES.find(c => c.id === matchedCat);
+    if (!cat) continue;
 
-        const street  = [a.house_number, a.road].filter(Boolean).join(" ");
-        const city    = a.city || a.town || a.village || a.suburb || "";
-        const state   = a.state || "";
-        const address = [street, city, state].filter(Boolean).join(", ");
+    // Build address from OSM tags
+    const street  = [tags["addr:housenumber"], tags["addr:street"]].filter(Boolean).join(" ");
+    const city    = tags["addr:city"] || tags["addr:suburb"] || "";
+    const state   = tags["addr:state"] || "";
+    const address = [street, city, state].filter(Boolean).join(", ");
 
-        results.push({
-          id: d.place_id, name, cat: id, icon: cat.icon,
-          lat: +d.lat, lng: +d.lon,
-          address, phone:"", website:"", cuisine:"", opening:"",
-        });
-      }
-      } catch(e) {
-        console.warn("Venue search failed for", id, term, e.message);
-      }
-    } // end terms loop
-    // Respect Nominatim rate limit between categories
-    await new Promise(res => setTimeout(res, 350));
+    const cuisine = tags.cuisine ? tags.cuisine.replace(/_/g," ") : "";
+
+    results.push({
+      id: osmId,
+      name,
+      cat: matchedCat,
+      icon: cat.icon,
+      lat: elLat,
+      lng: elLng,
+      address,
+      cuisine,
+      phone:   tags.phone   || tags["contact:phone"]   || "",
+      website: tags.website || tags["contact:website"] || "",
+      opening: tags.opening_hours || "",
+    });
   }
 
   return results;
@@ -2237,7 +2301,7 @@ function renderAreas() {
     wrap.appendChild(h("div",{style:"color:var(--muted);font-size:11px;text-align:center;margin:10px 0 16px;line-height:1.5"},"Times and distances are straight-line estimates — actual drive times depend on route and traffic."));
   } else {
     // Normal: multi-select area cards with fairness badge
-    // Thin candidates (fewer than 5 nearby venues) are silently dropped; a footer note tallies them.
+    // Thin candidates silently dropped; footer note tallies them.
     const visibleAreas = STATE.candidateAreas.map((area, i) => ({ area, i })).filter(({ area }) => !area.thin);
     const thinCount = STATE.candidateAreas.filter((area, i) => i > 0 && area.thin).length;
 
@@ -2266,7 +2330,6 @@ function renderAreas() {
       card.appendChild(times);
       wrap.appendChild(card);
     });
-
     if (thinCount > 0) {
       wrap.appendChild(h("div",{style:"color:var(--muted);font-size:11px;text-align:center;margin-top:4px;margin-bottom:4px;line-height:1.5"},
         `${thinCount} nearby area${thinCount>1?"s":""} with few venues not shown.`
