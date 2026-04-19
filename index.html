@@ -286,10 +286,10 @@ const VIBES = [
 
 const FEATURES = [
   {e:"⏱️", t:"True Travel-Time Fairness", d:"Optimises for equal commute time per person — not just map distance.",          u:true},
-  {e:"🗳️", t:"Built-in Group Voting",      d:"Everyone votes; the app surfaces genuine consensus, not the loudest voice.",   u:true},
+  {e:"⭐", t:"Shortlist & Share",           d:"Star your top venues and share with the group as an iMessage poll — everyone votes natively.",        u:true},
+  {e:"📤", t:"iMessage Ready",              d:"Generates formatted options with Apple Maps links, ready to paste as an iMessage poll.",               u:true},
   {e:"🌡️", t:"Vibe Matching",              d:"Set the mood and get curated venue picks to match the energy.",               u:true},
   {e:"👥", t:"Up to 4 Friends",            d:"Full group planning with per-person fairness scores for every venue.",         u:true},
-  {e:"📤", t:"Shareable Voting Links",     d:"Friends vote via a link — no app download required.",                         u:true},
   {e:"🗺️", t:"Live Leaflet Map",           d:"Real OpenStreetMap tiles with geocoded pins and live venue markers.",          u:false},
   {e:"🏪", t:"Real Venue Search",           d:"Live venue data from OpenStreetMap/Nominatim — restaurants, bars, spas and more.",u:false},
   {e:"📡", t:"GPS Location",               d:"Use your device GPS to set starting points instantly.",                        u:false},
@@ -2249,7 +2249,7 @@ function renderResults() {
 
   // Tabs
   const tabs=h("div",{class:"tabs"});
-  [["list","📋 List"],["map","🗺️ Map"],["vote","🗳️ Vote"]].forEach(([id,lb])=>{
+  [["list","📋 List"],["map","🗺️ Map"],["share","📤 Share"]].forEach(([id,lb])=>{
     const tab=h("button",{class:`tab${STATE.activeTab===id?" active":""}`},lb);
     tab.onclick=()=>{STATE.activeTab=id;render();};
     tabs.appendChild(tab);
@@ -2341,36 +2341,96 @@ function renderResults() {
     setTimeout(()=>buildLeafletMap("map"),50);
   }
 
-  else if (STATE.activeTab==="vote") {
-    const voteBanner=h("div",{style:"background:var(--accent-l);border-radius:11px;padding:11px 13px;margin-bottom:14px;border:1px solid rgba(26,127,90,.25)"});
-    voteBanner.append(h("div",{style:"color:var(--accent);font-weight:700;font-size:13px"},"🗳️ Group Voting"),h("div",{style:"color:var(--sub);font-size:12px;margin-top:2px;line-height:1.5"},"Vote on real venues near your midpoint. Share the link so everyone can weigh in."));
-    content.appendChild(voteBanner);
+  else if (STATE.activeTab==="share") {
+    const starred = STATE.venues.filter(v => STATE.saved.includes(v.id));
+    const activeFriends = STATE.friends.filter(f => f.coords);
 
-    STATE.venues.slice(0,12).forEach(v=>{
-      const mv=STATE.votes[v.id];
-      const card=h("div",{class:"vote-card"});
-      card.append(
-        h("div",{style:"width:38px;height:38px;border-radius:9px;background:var(--hi);display:flex;align-items:center;justify-content:center;font-size:19px;flex-shrink:0"},v.icon),
-        h("div",{style:"flex:1;min-width:0"},h("div",{style:"font-weight:700;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"},v.name),h("div",{style:"color:var(--sub);font-size:11px"},v.address||CATEGORIES.find(c=>c.id===v.cat)?.label||""))
+    if (starred.length === 0) {
+      // Empty state
+      const empty = h("div",{style:"text-align:center;padding:40px 16px"});
+      empty.appendChild(h("div",{style:"font-size:36px;margin-bottom:12px"},"★"));
+      empty.appendChild(h("div",{style:"font-weight:700;font-size:15px;margin-bottom:6px"},"No venues shortlisted yet"));
+      empty.appendChild(h("div",{style:"color:var(--sub);font-size:13px;line-height:1.6;max-width:240px;margin:0 auto"},"Tap ☆ on any venue in the List tab to add it to your shortlist, then share with the group."));
+      content.appendChild(empty);
+    } else {
+      // Header
+      const banner = h("div",{style:"background:var(--accent-l);border:1px solid rgba(26,127,90,.25);border-radius:11px;padding:11px 13px;margin-bottom:14px"});
+      banner.append(
+        h("div",{style:"color:var(--accent);font-weight:700;font-size:13px"},"📤 Share with the group"),
+        h("div",{style:"color:var(--sub);font-size:12px;margin-top:2px;line-height:1.5"},`Your ${starred.length} shortlisted venue${starred.length>1?"s":""} — copy and paste into iMessage to create a poll.`)
       );
-      const voteBtns=h("div",{style:"display:flex;gap:5px;flex-shrink:0"});
-      const upBtn=h("button",{class:`vote-btn${mv==="up"?" up":""}`},"👍");
-      const dnBtn=h("button",{class:`vote-btn${mv==="down"?" down":""}`},"👎");
-      upBtn.onclick=()=>{STATE.votes[v.id]=mv==="up"?null:"up";render();};
-      dnBtn.onclick=()=>{STATE.votes[v.id]=mv==="down"?null:"down";render();};
-      voteBtns.append(upBtn,dnBtn);
-      card.appendChild(voteBtns);
-      content.appendChild(card);
-    });
+      content.appendChild(banner);
 
-    const shareBtn=h("button",{class:"btn-primary",style:"margin-top:8px"},"📤 Share Voting Link");
-    shareBtn.onclick=()=>{
-      const url=window.location.href;
-      if(navigator.share){navigator.share({title:"Meet Me In The Middle",url});}
-      else if(navigator.clipboard){navigator.clipboard.writeText(url).then(()=>alert("Link copied to clipboard!"));}
-      else alert("Share URL: "+url);
-    };
-    content.appendChild(shareBtn);
+      // Shortlisted venue preview cards
+      starred.forEach(v => {
+        const times = activeFriends.map(f => estimateMins(f.coords,{lat:v.lat,lng:v.lng},STATE.travelMode));
+        const pct = fairnessPct(times);
+        const card = h("div",{style:"background:var(--surface);border:1.5px solid var(--border);border-radius:12px;padding:12px 13px;margin-bottom:8px;display:flex;gap:10px;align-items:flex-start"});
+        card.append(
+          h("div",{style:"font-size:22px;flex-shrink:0"},v.icon),
+          h("div",{style:"flex:1;min-width:0"},
+            h("div",{style:"font-weight:700;font-size:13px"},v.name),
+            h("div",{style:"color:var(--sub);font-size:11px;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"},v.address||""),
+            h("div",{style:`color:${pct>80?"var(--accent)":pct>60?"var(--gold)":"var(--coral)"};font-size:11px;font-weight:700;margin-top:3px`},"Fairness: "+pct+"%")
+          )
+        );
+        content.appendChild(card);
+      });
+
+      // Copy button
+      const copyBtn = h("button",{class:"btn-primary",style:"margin-top:6px"},"📋 Copy for iMessage Poll");
+      copyBtn.onclick = () => {
+        const area = STATE.candidateAreas[STATE.selectedAreas[0]];
+        const areaName = area?.label || (STATE.midpt ? "our meeting point" : "");
+        const friendNames = activeFriends.filter((_,i)=>i>0).map(f=>f.name).join(", ");
+
+        let msg = `Hey ${friendNames}! 👋\n\n`;
+        msg += `I found some great options for us to meet`;
+        if (areaName) msg += ` in ${areaName}`;
+        msg += `.\n\nVote for your favourite${starred.length>1?"s":""} below — I'll book the one with the most votes!\n\n`;
+
+        starred.forEach((v, i) => {
+          const mapsUrl = `https://maps.apple.com/?q=${encodeURIComponent(v.name)}&ll=${v.lat},${v.lng}&z=16`;
+          msg += `${i+1}. ${v.name}\n`;
+          if (v.address) msg += `   📍 ${v.address}\n`;
+          msg += `   🗺️ ${mapsUrl}\n\n`;
+        });
+
+        msg += `(Paste each venue name as a poll option in iMessage)`;
+
+        if (navigator.share) {
+          navigator.share({ title:"Where should we meet?", text:msg })
+            .catch(()=>{ navigator.clipboard?.writeText(msg); copyBtn.textContent="✓ Copied!"; setTimeout(()=>copyBtn.textContent="📋 Copy for iMessage Poll",2500); });
+        } else if (navigator.clipboard) {
+          navigator.clipboard.writeText(msg).then(()=>{
+            copyBtn.textContent="✓ Copied to clipboard!";
+            setTimeout(()=>copyBtn.textContent="📋 Copy for iMessage Poll",2500);
+          });
+        } else {
+          alert(msg);
+        }
+      };
+      content.appendChild(copyBtn);
+
+      // Share sheet button (direct iMessage handoff on iOS)
+      if (navigator.share) {
+        const shareBtn = h("button",{class:"btn-secondary",style:"width:100%;margin-top:8px;padding:11px;font-size:13px;font-weight:700"},"💬 Open in Messages");
+        shareBtn.onclick = () => {
+          const area = STATE.candidateAreas[STATE.selectedAreas[0]];
+          const areaName = area?.label || "";
+          const friendNames = activeFriends.filter((_,i)=>i>0).map(f=>f.name).join(", ");
+          let msg = `Hey ${friendNames}! Here are my top picks`;
+          if (areaName) msg += ` in ${areaName}`;
+          msg += `:\n\n`;
+          starred.forEach((v,i) => {
+            const mapsUrl = `https://maps.apple.com/?q=${encodeURIComponent(v.name)}&ll=${v.lat},${v.lng}&z=16`;
+            msg += `${i+1}. ${v.name} — ${mapsUrl}\n`;
+          });
+          navigator.share({ title:"Where should we meet?", text:msg });
+        };
+        content.appendChild(shareBtn);
+      }
+    }
   }
 
   wrap.appendChild(content);
