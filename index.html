@@ -1642,8 +1642,16 @@ function buildLeafletMap(containerId) {
     marker.on("click",()=>openModal("venue",{venue:v}));
   });
 
-  const allCoords=[[STATE.midpt.lat,STATE.midpt.lng],...activeFriends.map(f=>[f.coords.lat,f.coords.lng])];
-  if(allCoords.length>1) _mapInstance.fitBounds(allCoords,{padding:[40,40]});
+  // Center and zoom on the meeting area, not the friends.
+  // fitBounds on friend pins causes the camera to snap to home address
+  // when friends are co-located or close to the midpoint.
+  // Instead: fit to venue pins if any exist, otherwise hold at midpt zoom 15.
+  const venuePins = STATE.venues.slice(0, 30).map(v => [v.lat, v.lng]);
+  if (venuePins.length > 1) {
+    _mapInstance.fitBounds([[STATE.midpt.lat, STATE.midpt.lng], ...venuePins], {padding:[40,40], maxZoom:15});
+  } else {
+    _mapInstance.setView([STATE.midpt.lat, STATE.midpt.lng], 15);
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -2314,12 +2322,27 @@ function renderAreas() {
         render();
       };
       const header=h("div",{style:"display:flex;justify-content:space-between;align-items:flex-start"});
+      const appleUrl  = `https://maps.apple.com/?ll=${area.lat},${area.lng}&q=${encodeURIComponent(area.label)}&z=15`;
+      const googleUrl = `https://maps.google.com/?q=${area.lat},${area.lng}&z=15`;
+      const gid = `ag${i}`;
+      const appleSvg = `<svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="28" height="28" rx="6" fill="#fff"/><rect width="28" height="28" rx="6" fill="url(#${gid})" opacity=".15"/><defs><linearGradient id="${gid}" x1="0" y1="0" x2="28" y2="28" gradientUnits="userSpaceOnUse"><stop stop-color="#34C759"/><stop offset="1" stop-color="#30B0C7"/></linearGradient></defs><circle cx="14" cy="14" r="8" fill="none" stroke="#34C759" stroke-width="1.5"/><line x1="14" y1="6" x2="14" y2="9" stroke="#34C759" stroke-width="1.5" stroke-linecap="round"/><line x1="14" y1="19" x2="14" y2="22" stroke="#34C759" stroke-width="1.5" stroke-linecap="round"/><line x1="6" y1="14" x2="9" y2="14" stroke="#34C759" stroke-width="1.5" stroke-linecap="round"/><line x1="19" y1="14" x2="22" y2="14" stroke="#34C759" stroke-width="1.5" stroke-linecap="round"/><circle cx="14" cy="14" r="2" fill="#34C759"/><polygon points="14,8 16.5,13 14,12 11.5,13" fill="#E11D48"/></svg>`;
+      const googleSvg = `<svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="28" height="28" rx="6" fill="#fff"/><path d="M14 6C10.69 6 8 8.69 8 12c0 4.5 6 10 6 10s6-5.5 6-10c0-3.31-2.69-6-6-6z" fill="#EA4335"/><circle cx="14" cy="12" r="2.5" fill="#fff"/></svg>`;
+      const appleBtn = h("a",{href:appleUrl,target:"_blank",rel:"noreferrer",title:"Open in Apple Maps",style:"display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:7px;border:1px solid var(--border);background:var(--surface);box-shadow:0 1px 3px var(--sh);flex-shrink:0;text-decoration:none;"});
+      appleBtn.innerHTML = appleSvg;
+      const googleBtn = h("a",{href:googleUrl,target:"_blank",rel:"noreferrer",title:"Open in Google Maps",style:"display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:7px;border:1px solid var(--border);background:var(--surface);box-shadow:0 1px 3px var(--sh);flex-shrink:0;text-decoration:none;"});
+      googleBtn.innerHTML = googleSvg;
+      [appleBtn, googleBtn].forEach(btn => btn.addEventListener("click", e => e.stopPropagation()));
+      const iconsWrap = h("div",{style:"display:flex;gap:6px;flex-shrink:0;margin-left:8px"});
+      iconsWrap.append(appleBtn, googleBtn);
       header.append(
         h("div",{},
           h("div",{class:"area-name"}, (isSelected?"✓ ":"")+area.label),
           h("div",{class:"area-meta"},`~${area.mins} min max drive`)
         ),
-        h("div",{style:`width:46px;height:46px;border-radius:23px;background:${isSelected?"var(--accent)":"var(--bg-deep)"};border:2px solid ${isSelected?"var(--accent)":"var(--border)"};display:flex;align-items:center;justify-content:center;font-weight:900;font-size:13px;color:${isSelected?"white":"var(--muted)"};flex-shrink:0;transition:all .18s`},area.fairness+"%")
+        h("div",{style:"display:flex;align-items:center;gap:8px;flex-shrink:0"},
+          iconsWrap,
+          h("div",{style:`width:46px;height:46px;border-radius:23px;background:${isSelected?"var(--accent)":"var(--bg-deep)"};border:2px solid ${isSelected?"var(--accent)":"var(--border)"};display:flex;align-items:center;justify-content:center;font-weight:900;font-size:13px;color:${isSelected?"white":"var(--muted)"};flex-shrink:0;transition:all .18s`},area.fairness+"%")
+        )
       );
       card.appendChild(header);
       const times=h("div",{class:"area-times"});
